@@ -70,6 +70,25 @@
         </li>
       </ul>
 
+      <div
+        v-if="cellProbabilities.length"
+        class="mt-1 pt-1 border-t border-base-300/80 px-1"
+      >
+        <p class="text-[0.6rem] sm:text-xs font-semibold text-base-content/80 mb-1">
+          Chance on this cell
+        </p>
+        <div class="space-y-0.5">
+          <div
+            v-for="item in cellProbabilities"
+            :key="item.slug"
+            class="flex items-center justify-between gap-2 text-[0.55rem] sm:text-[0.65rem]"
+          >
+            <span class="truncate">{{ item.label }}</span>
+            <span class="font-bold tabular-nums">{{ probabilityPrefix }}{{ item.percent }}%</span>
+          </div>
+        </div>
+      </div>
+
       <p class="text-[0.5rem] sm:text-[0.55rem] text-center text-base-content/55 mt-1 pt-1 border-t border-base-300/80 px-2 leading-tight">
         Press <span class="font-semibold text-base-content/70">1</span>–<span class="font-semibold text-base-content/70">0</span> to place a number mark (e.g. dig order)
       </p>
@@ -91,6 +110,8 @@ const props = defineProps({
   x:         { type: Number, required: true },
   y:         { type: Number, required: true },
   possibleTreasures: { type: Array, default: () => [] },
+  cellProbabilities: { type: Array, default: () => [] },
+  probabilityApproximate: { type: Boolean, default: false },
   tileIndex: { type: Number, required: true }
 })
 
@@ -137,6 +158,10 @@ const popoverStyle = computed(() => ({
 }))
 
 const reverseKeyMap = Object.fromEntries(Object.entries(keyMap).map(([k, v]) => [v, k]))
+
+const probabilityPrefix = computed(() =>
+  props.probabilityApproximate ? '~' : ''
+)
 
 function selectHint(idx) {
   const chosenClass = props.hints[idx]
