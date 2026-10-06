@@ -117,6 +117,7 @@ import {
 import { readLandCacheMeta } from '@/utils/landCache.js'
 import { DIGGING_FORMATIONS } from '@/data/game/diggingFormations.js'
 import { buildDigTextLog } from '@/utils/digTextLog.js'
+import { loadPredictionJournal } from '@/utils/predictionJournal.js'
 
 const route = useRoute()
 const router = useRouter()
@@ -303,6 +304,10 @@ async function copyAiTextLog () {
     utcDate: dailyPatternDate.value || new Date().toISOString().slice(0, 10),
     landId: String(landId || ''),
     selectedTarget: probabilityTarget.value,
+    predictionJournal: loadPredictionJournal(
+      String(landId || ''),
+      dailyPatternDate.value || new Date().toISOString().slice(0, 10),
+    ),
     gridSize: 10,
   })
 
