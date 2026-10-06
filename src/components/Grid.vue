@@ -62,7 +62,7 @@
           v-if="probabilityPercent(index) !== null"
           class="probability-badge"
           :title="probabilityTitle(index)"
-        >{{ probabilityPercent(index) }}%</span>
+        >{{ probabilityPrefix }}{{ probabilityPercent(index) }}%</span>
 
         <!-- transient shovel dig reveal overlay for freshly-dug tiles.
              Kept outside the tile-img/prediction v-if chain so it doesn't
@@ -177,7 +177,7 @@ const picker = ref(null)
 // able to anchor to its shape. Including all shapes only ever makes deductions
 // more conservative (never a wrong guarantee).
 const { solverPatternKeys } = useLandData()
-const { guaranteed, guaranteedSlugs, guaranteedCandidates, probabilities, globalSolutionCount, probabilityComplete } = usePredictionEngine(
+const { guaranteed, guaranteedSlugs, guaranteedCandidates, probabilities, globalSolutionCount, probabilityComplete, probabilityMode } = usePredictionEngine(
   tiles,
   solverPatternKeys,
   toRef(() => showPrediction || showProbability),
@@ -225,6 +225,10 @@ function predictionUnknownTitle(index) {
   return 'Guaranteed treasure — exact type unknown'
 }
 
+const probabilityPrefix = computed(() =>
+  probabilityMode.value === 'approximate' ? '~' : ''
+)
+
 function probabilityPercent(index) {
   if (!showProbability || !probabilityTarget || isRevealed(tiles.value[index])) return null
   const p = getTreasureProbability(probabilities.value, index, probabilityTarget)
@@ -236,8 +240,8 @@ function probabilityTitle(index) {
   const pct = probabilityPercent(index)
   if (pct === null) return ''
   const label = probabilityTarget.replace(/_/g, ' ')
-  const mode = probabilityComplete.value ? 'exact' : 'sampled'
-  return `${pct}% ${label} (${mode}, ${globalSolutionCount.value} valid boards)`
+  const mode = probabilityMode.value === 'exact' ? 'exact' : 'approximate'
+  return `${mode === 'approximate' ? '~' : ''}${pct}% ${label} (${mode}${mode === 'exact' ? `, ${globalSolutionCount.value} valid boards` : ''})`
 }
 
 // static labels for overlays
