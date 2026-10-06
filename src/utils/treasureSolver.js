@@ -110,6 +110,8 @@ export function solveTreasures(
       probabilityComplete: true,
       probabilityReason: null,
       probabilityMode: 'none',
+      smartDig: null,
+      smartDigRanking: [],
       partial: false,
     }
   }
@@ -135,6 +137,15 @@ export function solveTreasures(
     }
     // else: undug / hint-only — unknown, could be treasure
   }
+
+  // Preserve the cells the player has actually dug. revealedTreasureName is
+  // later extended with pseudo-reveals from Guaranteed mode, which must still
+  // remain eligible as future digs for the information-gain ranking.
+  const actuallyRevealedCells = new Set([
+    ...revealedSand,
+    ...revealedCrab,
+    ...revealedTreasureName.keys(),
+  ])
 
   // Formation shapes present on the board. Dedup by key (one instance is enough
   // for local reasoning), and include every shape so a revealed treasure can be
@@ -917,9 +928,12 @@ export function solveTreasures(
   let probabilityComplete = true
   let probabilityReason = null
   let probabilityMode = 'none'
+  let smartDig = null
+  let smartDigRanking = []
 
   if (includeProbabilities) {
     const probabilityCounts = new Map() // idx -> Map<slug,count>
+    const outcomeCounts = new Map() // idx -> Map<outcome,count>, exact boards only
     const probabilityGroups = []
     let probabilityGroupsValid = true
 
@@ -1107,6 +1121,43 @@ export function solveTreasures(
           }
           byName.set(slug, (byName.get(slug) ?? 0) + 1)
         }
+
+        // Record the observable result of digging every still-hidden cell for
+        // this complete board. In the game, every non-treasure cell adjacent
+        // orthogonally to a treasure is a Crab; all other cells are Sand.
+        // These partitions let us choose the next dig that, on average, rules
+        // out the largest number of still-valid board configurations.
+        const totalCells = gridSize * gridSize
+        for (let idx = 0; idx < totalCells; idx++) {
+          if (actuallyRevealedCells.has(idx)) continue
+
+          let outcome
+          const treasureName = cellsInSolution.get(idx)
+          if (treasureName !== undefined) {
+            outcome = `treasure:${slugify(treasureName)}`
+          } else {
+            const x = idx % gridSize
+            const y = Math.floor(idx / gridSize)
+            let nextToTreasure = false
+            for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+              const nx = x + dx
+              const ny = y + dy
+              if (!inBounds(nx, ny)) continue
+              if (cellsInSolution.has(ny * gridSize + nx)) {
+                nextToTreasure = true
+                break
+              }
+            }
+            outcome = nextToTreasure ? 'crab' : 'sand'
+          }
+
+          let counts = outcomeCounts.get(idx)
+          if (!counts) {
+            counts = new Map()
+            outcomeCounts.set(idx, counts)
+          }
+          counts.set(outcome, (counts.get(outcome) ?? 0) + 1)
+        }
       }
 
       const revealEntries = [...revealedTreasureName]
@@ -1228,6 +1279,42 @@ export function solveTreasures(
           probabilities.set(idx, byName)
         }
         probabilityMode = 'exact'
+
+        // Greedy information-gain ranking. Expected elimination is
+        // 1 - sum(p(outcome)^2): after observing the result, it is the
+        // expected fraction of currently-valid boards that disappear.
+        smartDigRanking = []
+        for (const [idx, counts] of outcomeCounts) {
+          if (actuallyRevealedCells.has(idx)) continue
+
+          let sumSquares = 0
+          let largestBucket = 0
+          const outcomes = []
+          for (const [outcome, count] of counts) {
+            const p = count / globalSolutionCount
+            sumSquares += p * p
+            largestBucket = Math.max(largestBucket, count)
+            outcomes.push({ outcome, probability: p, count })
+          }
+
+          outcomes.sort((a, b) =>
+            b.probability - a.probability || a.outcome.localeCompare(b.outcome)
+          )
+
+          smartDigRanking.push({
+            index: idx,
+            expectedElimination: 1 - sumSquares,
+            worstCaseElimination: 1 - (largestBucket / globalSolutionCount),
+            outcomes,
+          })
+        }
+
+        smartDigRanking.sort((a, b) =>
+          b.expectedElimination - a.expectedElimination ||
+          b.worstCaseElimination - a.worstCaseElimination ||
+          a.index - b.index
+        )
+        smartDig = smartDigRanking[0] ?? null
       } else if (probabilityReason === 'too-complex') {
         // Never expose the deterministic DFS prefix as a probability. Fall
         // back to a transparent local-placement estimate instead.
@@ -1253,6 +1340,8 @@ export function solveTreasures(
     probabilityComplete,
     probabilityReason,
     probabilityMode,
+    smartDig,
+    smartDigRanking,
     partial: false,
   }
 }
