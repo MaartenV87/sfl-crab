@@ -7,7 +7,7 @@
 import { ref, watch } from 'vue'
 import { solveTreasures } from '@/utils/treasureSolver.js'
 
-export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { gridSize = 10, syncRef = null, probabilityRef = null } = {}) {
+export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { gridSize = 10, syncRef = null, probabilityRef = null, probabilityTargetRef = null } = {}) {
   const guaranteed = ref(new Set())
   const guaranteedSlugs = ref(new Map())
   const guaranteedCandidates = ref(new Map())
@@ -19,6 +19,15 @@ export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { grid
   const globalSolutionCount = ref(0)
   const probabilityComplete = ref(true)
   const probabilityReason = ref(null)
+  const probabilityMode = ref('none')
+  const smartDig = ref(null)
+  const smartDigRanking = ref([])
+  const targetPlan = ref(null)
+  const targetComplete = ref(false)
+  const targetRequiredCount = ref(0)
+  const targetFoundCount = ref(0)
+  const targetRemainingCount = ref(0)
+  const targetLayoutCount = ref(0)
 
   const schedule = (typeof window !== 'undefined' && window.requestIdleCallback)
     ? window.requestIdleCallback.bind(window)
@@ -34,7 +43,7 @@ export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { grid
       tilesRef.value,
       patternKeysRef.value,
       gridSize,
-      { includeProbabilities: Boolean(probabilityRef?.value) },
+      { includeProbabilities: Boolean(probabilityRef?.value), probabilityTarget: probabilityTargetRef?.value ?? '' },
     )
     guaranteed.value = result.guaranteed
     guaranteedSlugs.value = result.guaranteedSlugs
@@ -47,6 +56,15 @@ export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { grid
     globalSolutionCount.value = result.globalSolutionCount ?? 0
     probabilityComplete.value = result.probabilityComplete ?? true
     probabilityReason.value = result.probabilityReason ?? null
+    probabilityMode.value = result.probabilityMode ?? 'none'
+    smartDig.value = result.smartDig ?? null
+    smartDigRanking.value = result.smartDigRanking ?? []
+    targetPlan.value = result.targetPlan ?? null
+    targetComplete.value = result.targetComplete ?? false
+    targetRequiredCount.value = result.targetRequiredCount ?? 0
+    targetFoundCount.value = result.targetFoundCount ?? 0
+    targetRemainingCount.value = result.targetRemainingCount ?? 0
+    targetLayoutCount.value = result.targetLayoutCount ?? 0
   }
 
   function recompute() {
@@ -64,6 +82,15 @@ export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { grid
       globalSolutionCount.value = 0
       probabilityComplete.value = true
       probabilityReason.value = null
+      probabilityMode.value = 'none'
+      smartDig.value = null
+      smartDigRanking.value = []
+      targetPlan.value = null
+      targetComplete.value = false
+      targetRequiredCount.value = 0
+      targetFoundCount.value = 0
+      targetRemainingCount.value = 0
+      targetLayoutCount.value = 0
       return
     }
 
@@ -83,6 +110,7 @@ export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { grid
   const sources = [tilesRef, patternKeysRef, enabledRef]
   if (syncRef) sources.push(syncRef)
   if (probabilityRef) sources.push(probabilityRef)
+  if (probabilityTargetRef) sources.push(probabilityTargetRef)
 
   watch(
     sources,
@@ -90,5 +118,5 @@ export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { grid
     { immediate: true, deep: true }
   )
 
-  return { guaranteed, guaranteedSlugs, guaranteedCandidates, guaranteedFormationCounts, remainingCounts, remainingRegions, possibleTreasureCells, probabilities, globalSolutionCount, probabilityComplete, probabilityReason }
+  return { guaranteed, guaranteedSlugs, guaranteedCandidates, guaranteedFormationCounts, remainingCounts, remainingRegions, possibleTreasureCells, probabilities, globalSolutionCount, probabilityComplete, probabilityReason, probabilityMode, smartDig, smartDigRanking, targetPlan, targetComplete, targetRequiredCount, targetFoundCount, targetRemainingCount, targetLayoutCount }
 }

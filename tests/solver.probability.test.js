@@ -58,7 +58,7 @@ describe('treasure probability enumeration', () => {
     expect(result.probabilities.get(3)?.get('hieroglyph')).toBe(1)
   })
 
-  it('does not expose biased prefix percentages when the solution cap is hit', () => {
+  it('falls back to explicitly approximate local percentages when the exact search cap is hit', () => {
     const result = solveTreasures(
       emptyTiles(3),
       ['HIEROGLYPH'],
@@ -68,6 +68,94 @@ describe('treasure probability enumeration', () => {
 
     expect(result.probabilityComplete).toBe(false)
     expect(result.probabilityReason).toBe('too-complex')
-    expect(result.probabilities.size).toBe(0)
+    expect(result.probabilityMode).toBe('approximate')
+    expect(result.probabilities.size).toBeGreaterThan(0)
   })
+
+  it('ranks the most informative next dig from exact global outcomes', () => {
+    const result = solveTreasures(
+      emptyTiles(3),
+      ['HIEROGLYPH'],
+      3,
+      { includeProbabilities: true, probabilitySolutionCap: 100, probabilityNodeCap: 10000 },
+    )
+
+    expect(result.probabilityMode).toBe('exact')
+    expect(result.smartDig).not.toBeNull()
+    expect(result.smartDigRanking.length).toBeGreaterThan(0)
+    expect(result.smartDig.expectedElimination).toBeGreaterThan(0)
+
+    // Ranking must be sorted descending by expected elimination.
+    for (let i = 1; i < result.smartDigRanking.length; i++) {
+      expect(
+        result.smartDigRanking[i - 1].expectedElimination
+          >= result.smartDigRanking[i].expectedElimination
+      ).toBe(true)
+    }
+  })
+
+  it('can optimize Smart Dig specifically for the selected treasure', () => {
+    const result = solveTreasures(
+      emptyTiles(3),
+      ['HIEROGLYPH'],
+      3,
+      {
+        includeProbabilities: true,
+        probabilityTarget: 'hieroglyph',
+        probabilitySolutionCap: 100,
+        probabilityNodeCap: 10000,
+      },
+    )
+
+    expect(result.probabilityMode).toBe('exact')
+    expect(result.smartDig).not.toBeNull()
+    expect(result.smartDig.targetAware).toBe(true)
+    expect(result.smartDig.targetInfoGain).toBeGreaterThanOrEqual(0)
+    expect(result.smartDig.targetHitProbability).toBeGreaterThanOrEqual(0)
+
+    for (let i = 1; i < result.smartDigRanking.length; i++) {
+      const prev = result.smartDigRanking[i - 1]
+      const next = result.smartDigRanking[i]
+      expect(
+        prev.targetInfoGain > next.targetInfoGain ||
+        (
+          prev.targetInfoGain === next.targetInfoGain &&
+          prev.targetHitProbability >= next.targetHitProbability
+        )
+      ).toBe(true)
+    }
+  })
+
+
+  it('builds a monotonic combined three-step target hit plan', () => {
+    const result = solveTreasures(
+      emptyTiles(3),
+      ['HIEROGLYPH'],
+      3,
+      {
+        includeProbabilities: true,
+        probabilityTarget: 'hieroglyph',
+        probabilitySolutionCap: 100,
+        probabilityNodeCap: 10000,
+      },
+    )
+
+    expect(result.probabilityMode).toBe('exact')
+    expect(result.targetPlan).not.toBeNull()
+    expect(result.targetPlan.exact).toBe(true)
+    expect(result.targetPlan.steps.length).toBeGreaterThan(0)
+    expect(result.targetPlan.steps.length).toBeLessThanOrEqual(3)
+
+    for (let i = 1; i < result.targetPlan.steps.length; i++) {
+      expect(
+        result.targetPlan.steps[i].cumulativeProbability
+          >= result.targetPlan.steps[i - 1].cumulativeProbability
+      ).toBe(true)
+    }
+
+    expect(result.targetPlan.cumulativeProbability).toBe(
+      result.targetPlan.steps[result.targetPlan.steps.length - 1].cumulativeProbability
+    )
+  })
+
 })
