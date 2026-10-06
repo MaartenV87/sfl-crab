@@ -56,6 +56,14 @@
           :title="predictionUnknownTitle(index)"
         >?</span>
 
+        <!-- Target-specific probability overlay. Guaranteed predictions keep
+             priority through the existing image/unknown rendering above. -->
+        <span
+          v-if="probabilityPercent(index) !== null"
+          class="probability-badge"
+          :title="probabilityTitle(index)"
+        >{{ probabilityPercent(index) }}%</span>
+
         <!-- transient shovel dig reveal overlay for freshly-dug tiles.
              Kept outside the tile-img/prediction v-if chain so it doesn't
              break it; it's an absolute overlay so DOM order is irrelevant. -->
@@ -135,6 +143,7 @@ import { useReliableAssets } from '@/composables/useReliableAssets.js'
 import { getLabelFromTile } from '@/utils/hintLabel.js'
 import { isRevealed } from '@/utils/tileState.js'
 import { useFeedbackModal } from '@/composables/useFeedbackModal.js'
+import { getTreasureProbability } from '@/utils/treasureProbability.js'
 
 // Use reliable assets composable
 const { getImageSrc } = useReliableAssets()
@@ -148,6 +157,8 @@ const { showTreasureOrder, treasureOrderMap, showLandIdInUrl, showPrediction, in
   showLandIdInUrl:   { type: Boolean, default: true },
   showPrediction:    { type: Boolean, default: false },
   interactive:       { type: Boolean, default: true },
+  showProbability:    { type: Boolean, default: false },
+  probabilityTarget:  { type: String, default: '' },
 })
 
 // init grid manager
@@ -166,7 +177,7 @@ const picker = ref(null)
 // able to anchor to its shape. Including all shapes only ever makes deductions
 // more conservative (never a wrong guarantee).
 const { solverPatternKeys } = useLandData()
-const { guaranteed, guaranteedSlugs, guaranteedCandidates } = usePredictionEngine(
+const { guaranteed, guaranteedSlugs, guaranteedCandidates, probabilities, globalSolutionCount, probabilityComplete } = usePredictionEngine(
   tiles,
   solverPatternKeys,
   toRef(() => showPrediction),
@@ -211,6 +222,21 @@ function predictionUnknownTitle(index) {
     return `Guaranteed treasure — could be: ${names}`
   }
   return 'Guaranteed treasure — exact type unknown'
+}
+
+function probabilityPercent(index) {
+  if (!showProbability || !probabilityTarget || isRevealed(tiles.value[index])) return null
+  const p = getTreasureProbability(probabilities.value, index, probabilityTarget)
+  if (p <= 0) return null
+  return Math.round(p * 100)
+}
+
+function probabilityTitle(index) {
+  const pct = probabilityPercent(index)
+  if (pct === null) return ''
+  const label = probabilityTarget.replace(/_/g, ' ')
+  const mode = probabilityComplete.value ? 'exact' : 'sampled'
+  return `${pct}% ${label} (${mode}, ${globalSolutionCount.value} valid boards)`
 }
 
 // static labels for overlays
@@ -327,6 +353,21 @@ function getTileLabelMark (tile) {
 /* keep your existing tile-relative rule */
 .tile {
   position: relative;
+}
+
+.probability-badge {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  z-index: 3;
+  padding: 1px 3px;
+  border-radius: 4px;
+  font-size: 0.62rem;
+  line-height: 1rem;
+  font-weight: 700;
+  background: rgba(0, 0, 0, 0.72);
+  color: white;
+  pointer-events: none;
 }
 
 .badge {
