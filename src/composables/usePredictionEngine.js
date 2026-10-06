@@ -22,6 +22,7 @@ export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { grid
   const probabilityMode = ref('none')
   const smartDig = ref(null)
   const smartDigRanking = ref([])
+  const targetPlan = ref(null)
 
   const schedule = (typeof window !== 'undefined' && window.requestIdleCallback)
     ? window.requestIdleCallback.bind(window)
@@ -53,6 +54,7 @@ export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { grid
     probabilityMode.value = result.probabilityMode ?? 'none'
     smartDig.value = result.smartDig ?? null
     smartDigRanking.value = result.smartDigRanking ?? []
+    targetPlan.value = result.targetPlan ?? null
   }
 
   function recompute() {
@@ -73,6 +75,7 @@ export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { grid
       probabilityMode.value = 'none'
       smartDig.value = null
       smartDigRanking.value = []
+      targetPlan.value = null
       return
     }
 
@@ -100,5 +103,5 @@ export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { grid
     { immediate: true, deep: true }
   )
 
-  return { guaranteed, guaranteedSlugs, guaranteedCandidates, guaranteedFormationCounts, remainingCounts, remainingRegions, possibleTreasureCells, probabilities, globalSolutionCount, probabilityComplete, probabilityReason, probabilityMode, smartDig, smartDigRanking }
+  return { guaranteed, guaranteedSlugs, guaranteedCandidates, guaranteedFormationCounts, remainingCounts, remainingRegions, possibleTreasureCells, probabilities, globalSolutionCount, probabilityComplete, probabilityReason, probabilityMode, smartDig, smartDigRanking, targetPlan }
 }
