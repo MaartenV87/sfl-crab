@@ -91,6 +91,7 @@ export function solveTreasures(
   gridSize = 10,
   {
     includeProbabilities = false,
+    probabilityTarget = '',
     probabilitySolutionCap = 20000,
     probabilityNodeCap = 100000,
   } = {},
@@ -934,6 +935,12 @@ export function solveTreasures(
   if (includeProbabilities) {
     const probabilityCounts = new Map() // idx -> Map<slug,count>
     const outcomeCounts = new Map() // idx -> Map<outcome,count>, exact boards only
+    // Target-aware joint distribution: cell -> outcome -> target-layout signature -> count.
+    // This lets Smart Dig value only information that changes where the selected
+    // treasure can be, instead of being distracted by e.g. Old Bottle ambiguity.
+    const targetJointCounts = new Map()
+    const targetSignatureCounts = new Map()
+    const normalizedProbabilityTarget = slugify(probabilityTarget)
     const probabilityGroups = []
     let probabilityGroupsValid = true
 
@@ -1112,6 +1119,29 @@ export function solveTreasures(
           for (const [idx, name] of plots) cellsInSolution.set(idx, name)
         }
 
+        // Target-layout signature contains only still-undug cells of the
+        // selected treasure. Different bottle/clam/etc. layouts with the same
+        // target signature are intentionally treated as the same target state.
+        const targetCells = []
+        if (normalizedProbabilityTarget) {
+          for (const [idx, name] of cellsInSolution) {
+            if (
+              !actuallyRevealedCells.has(idx) &&
+              slugify(name) === normalizedProbabilityTarget
+            ) {
+              targetCells.push(idx)
+            }
+          }
+        }
+        targetCells.sort((a, b) => a - b)
+        const targetSignature = targetCells.join(',')
+        if (normalizedProbabilityTarget) {
+          targetSignatureCounts.set(
+            targetSignature,
+            (targetSignatureCounts.get(targetSignature) ?? 0) + 1,
+          )
+        }
+
         for (const [idx, name] of cellsInSolution) {
           const slug = slugify(name)
           let byName = probabilityCounts.get(idx)
@@ -1157,6 +1187,23 @@ export function solveTreasures(
             outcomeCounts.set(idx, counts)
           }
           counts.set(outcome, (counts.get(outcome) ?? 0) + 1)
+
+          if (normalizedProbabilityTarget) {
+            let byOutcome = targetJointCounts.get(idx)
+            if (!byOutcome) {
+              byOutcome = new Map()
+              targetJointCounts.set(idx, byOutcome)
+            }
+            let bySignature = byOutcome.get(outcome)
+            if (!bySignature) {
+              bySignature = new Map()
+              byOutcome.set(outcome, bySignature)
+            }
+            bySignature.set(
+              targetSignature,
+              (bySignature.get(targetSignature) ?? 0) + 1,
+            )
+          }
         }
       }
 
@@ -1280,40 +1327,126 @@ export function solveTreasures(
         }
         probabilityMode = 'exact'
 
-        // Greedy information-gain ranking. Expected elimination is
-        // 1 - sum(p(outcome)^2): after observing the result, it is the
-        // expected fraction of currently-valid boards that disappear.
         smartDigRanking = []
-        for (const [idx, counts] of outcomeCounts) {
-          if (actuallyRevealedCells.has(idx)) continue
 
-          let sumSquares = 0
-          let largestBucket = 0
-          const outcomes = []
-          for (const [outcome, count] of counts) {
-            const p = count / globalSolutionCount
-            sumSquares += p * p
-            largestBucket = Math.max(largestBucket, count)
-            outcomes.push({ outcome, probability: p, count })
+        if (normalizedProbabilityTarget && targetSignatureCounts.size > 1) {
+          // Target-aware information gain. We measure uncertainty only over
+          // layouts of the selected treasure. If a dig merely distinguishes
+          // two Old Bottle layouts while the Otter Pebble cells stay identical,
+          // its targetInfoGain is exactly zero.
+          const total = globalSolutionCount
+          let baselineCollision = 0
+          for (const count of targetSignatureCounts.values()) {
+            const p = count / total
+            baselineCollision += p * p
+          }
+          const baselineImpurity = 1 - baselineCollision
+
+          for (const [idx, byOutcome] of targetJointCounts) {
+            if (actuallyRevealedCells.has(idx)) continue
+
+            let expectedPosteriorImpurity = 0
+            let targetHitProbability = 0
+            let worstPosteriorImpurity = 0
+            const outcomes = []
+
+            for (const [outcome, bySignature] of byOutcome) {
+              let outcomeCount = 0
+              for (const count of bySignature.values()) outcomeCount += count
+              const pOutcome = outcomeCount / total
+
+              let posteriorCollision = 0
+              for (const count of bySignature.values()) {
+                const p = count / outcomeCount
+                posteriorCollision += p * p
+              }
+              const posteriorImpurity = 1 - posteriorCollision
+              expectedPosteriorImpurity += pOutcome * posteriorImpurity
+              worstPosteriorImpurity = Math.max(
+                worstPosteriorImpurity,
+                posteriorImpurity,
+              )
+
+              if (outcome === `treasure:${normalizedProbabilityTarget}`) {
+                targetHitProbability += pOutcome
+              }
+
+              outcomes.push({
+                outcome,
+                probability: pOutcome,
+                count: outcomeCount,
+                targetPosteriorImpurity: posteriorImpurity,
+              })
+            }
+
+            outcomes.sort((a, b) =>
+              b.probability - a.probability || a.outcome.localeCompare(b.outcome)
+            )
+
+            const rawTargetGain = Math.max(
+              0,
+              baselineImpurity - expectedPosteriorImpurity,
+            )
+            const targetInfoGain = baselineImpurity > 0
+              ? rawTargetGain / baselineImpurity
+              : 0
+            const worstCaseTargetGain = baselineImpurity > 0
+              ? Math.max(0, baselineImpurity - worstPosteriorImpurity) / baselineImpurity
+              : 0
+
+            smartDigRanking.push({
+              index: idx,
+              targetInfoGain,
+              targetHitProbability,
+              worstCaseTargetGain,
+              expectedTargetImpurity: expectedPosteriorImpurity,
+              outcomes,
+              targetAware: true,
+            })
           }
 
-          outcomes.sort((a, b) =>
-            b.probability - a.probability || a.outcome.localeCompare(b.outcome)
+          smartDigRanking.sort((a, b) =>
+            b.targetInfoGain - a.targetInfoGain ||
+            b.targetHitProbability - a.targetHitProbability ||
+            b.worstCaseTargetGain - a.worstCaseTargetGain ||
+            a.index - b.index
           )
+        } else {
+          // If no target is selected (or its location is already fully known),
+          // fall back to generic whole-board information gain.
+          for (const [idx, counts] of outcomeCounts) {
+            if (actuallyRevealedCells.has(idx)) continue
 
-          smartDigRanking.push({
-            index: idx,
-            expectedElimination: 1 - sumSquares,
-            worstCaseElimination: 1 - (largestBucket / globalSolutionCount),
-            outcomes,
-          })
+            let sumSquares = 0
+            let largestBucket = 0
+            const outcomes = []
+            for (const [outcome, count] of counts) {
+              const p = count / globalSolutionCount
+              sumSquares += p * p
+              largestBucket = Math.max(largestBucket, count)
+              outcomes.push({ outcome, probability: p, count })
+            }
+
+            outcomes.sort((a, b) =>
+              b.probability - a.probability || a.outcome.localeCompare(b.outcome)
+            )
+
+            smartDigRanking.push({
+              index: idx,
+              expectedElimination: 1 - sumSquares,
+              worstCaseElimination: 1 - (largestBucket / globalSolutionCount),
+              outcomes,
+              targetAware: false,
+            })
+          }
+
+          smartDigRanking.sort((a, b) =>
+            b.expectedElimination - a.expectedElimination ||
+            b.worstCaseElimination - a.worstCaseElimination ||
+            a.index - b.index
+          )
         }
 
-        smartDigRanking.sort((a, b) =>
-          b.expectedElimination - a.expectedElimination ||
-          b.worstCaseElimination - a.worstCaseElimination ||
-          a.index - b.index
-        )
         smartDig = smartDigRanking[0] ?? null
       } else if (probabilityReason === 'too-complex') {
         // Never expose the deterministic DFS prefix as a probability. Fall
