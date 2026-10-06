@@ -126,4 +126,36 @@ describe('treasure probability enumeration', () => {
     }
   })
 
+
+  it('builds a monotonic combined three-step target hit plan', () => {
+    const result = solveTreasures(
+      emptyTiles(3),
+      ['HIEROGLYPH'],
+      3,
+      {
+        includeProbabilities: true,
+        probabilityTarget: 'hieroglyph',
+        probabilitySolutionCap: 100,
+        probabilityNodeCap: 10000,
+      },
+    )
+
+    expect(result.probabilityMode).toBe('exact')
+    expect(result.targetPlan).not.toBeNull()
+    expect(result.targetPlan.exact).toBe(true)
+    expect(result.targetPlan.steps.length).toBeGreaterThan(0)
+    expect(result.targetPlan.steps.length).toBeLessThanOrEqual(3)
+
+    for (let i = 1; i < result.targetPlan.steps.length; i++) {
+      expect(
+        result.targetPlan.steps[i].cumulativeProbability
+          >= result.targetPlan.steps[i - 1].cumulativeProbability
+      ).toBe(true)
+    }
+
+    expect(result.targetPlan.cumulativeProbability).toBe(
+      result.targetPlan.steps[result.targetPlan.steps.length - 1].cumulativeProbability
+    )
+  })
+
 })
