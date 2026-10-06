@@ -1351,7 +1351,7 @@ export function solveTreasures(
           const pool = candidates.slice(0, 30)
           const words = Math.ceil(globalSolutionCount / 32)
           const bitsets = new Map(pool.map(({ idx }) => [idx, new Uint32Array(words)]))
-          const poolSet = new Set(pool.map(({ idx }) => idx)
+          const poolSet = new Set(pool.map(({ idx }) => idx))
 
           for (let si = 0; si < targetSolutionCells.length; si++) {
             const word = si >>> 5
@@ -1427,7 +1427,6 @@ export function solveTreasures(
             // displayed cumulative percentage is meaningful.
             const remaining = [...bestCombo]
             const ordered = []
-            let previousCount = 0
             while (remaining.length) {
               let bestIdx = remaining[0]
               let bestUnion = -1
@@ -1440,7 +1439,6 @@ export function solveTreasures(
               }
               ordered.push(bestIdx)
               remaining.splice(remaining.indexOf(bestIdx), 1)
-              previousCount = bestUnion
             }
 
             const steps = []
