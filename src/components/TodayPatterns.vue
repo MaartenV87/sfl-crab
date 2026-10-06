@@ -58,7 +58,12 @@ const serverCompletedIndexes = computed(() =>
 )
 
 const markedIndexList = computed(() => [...markedIndexes.value])
-const completedIndexList = computed(() => [...serverCompletedIndexes.value])
+const completedIndexList = computed(() => [
+  ...new Set([
+    ...serverCompletedIndexes.value,
+    ...markedIndexes.value,
+  ]),
+])
 
 // Second, independent solver instance — solves against solverPatternKeys
 // (historical-aware, same source Grid.vue's own instance uses), since
@@ -72,7 +77,11 @@ const { guaranteedFormationCounts } = usePredictionEngine(
 )
 
 const guaranteedIndexList = computed(() => [
-  ...buildGuaranteedIndexes(patternKeys.value, guaranteedFormationCounts.value, serverCompletedIndexes.value),
+  ...buildGuaranteedIndexes(
+    patternKeys.value,
+    guaranteedFormationCounts.value,
+    new Set(completedIndexList.value),
+  ),
 ])
 
 const now = useNow({ interval: 30000 })
