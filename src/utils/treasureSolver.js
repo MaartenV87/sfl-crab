@@ -936,6 +936,43 @@ export function solveTreasures(
       probabilityGroups.push({ key, need, placements })
     }
 
+    // Pre-filter single-instance groups with revealed treasure names that can
+    // only belong to that remaining formation key. This is exact (not a
+    // heuristic) and massively reduces the global search on real boards.
+    const fixedProbabilityCells = new Set()
+    for (const plots of confirmedPlacements) {
+      for (const idx of plots.keys()) fixedProbabilityCells.add(idx)
+    }
+
+    if (probabilityGroupsValid) {
+      const exclusiveRevealsByKey = new Map()
+      for (const [idx, name] of revealedTreasureName) {
+        if (fixedProbabilityCells.has(idx)) continue
+
+        const owners = probabilityGroups.filter(group =>
+          DIGGING_FORMATIONS[group.key]?.some(plot => namesMatch(plot.name, name)),
+        )
+
+        if (owners.length === 1 && owners[0].need === 1) {
+          const key = owners[0].key
+          if (!exclusiveRevealsByKey.has(key)) exclusiveRevealsByKey.set(key, [])
+          exclusiveRevealsByKey.get(key).push([idx, name])
+        }
+      }
+
+      for (const group of probabilityGroups) {
+        const required = exclusiveRevealsByKey.get(group.key)
+        if (!required?.length) continue
+        group.placements = group.placements.filter(plots =>
+          required.every(([idx, name]) => namesMatch(plots.get(idx), name)),
+        )
+        if (group.placements.length < group.need) {
+          probabilityGroupsValid = false
+          break
+        }
+      }
+    }
+
     probabilityGroups.sort((a, b) =>
       (a.placements.length / Math.max(1, a.need)) -
       (b.placements.length / Math.max(1, b.need))
@@ -1006,9 +1043,7 @@ export function solveTreasures(
       let probabilityAborted = false
 
       // Confirmed instances are fixed ground truth and cannot be overlapped.
-      for (const plots of confirmedPlacements) {
-        for (const idx of plots.keys()) occupied.add(idx)
-      }
+      for (const idx of fixedProbabilityCells) occupied.add(idx)
 
       const allRevealsCovered = () => {
         for (const idx of revealedTreasureName.keys()) {
@@ -1074,6 +1109,61 @@ export function solveTreasures(
         }
       }
 
+      const revealEntries = [...revealedTreasureName]
+      const crabNeighbours = [...revealedCrab].map(idx => {
+        const x = idx % gridSize
+        const y = Math.floor(idx / gridSize)
+        return [[1, 0], [-1, 0], [0, 1], [0, -1]]
+          .map(([dx, dy]) => [x + dx, y + dy])
+          .filter(([nx, ny]) => inBounds(nx, ny))
+          .map(([nx, ny]) => ny * gridSize + nx)
+      })
+
+      const placementFitsOccupied = plots =>
+        ![...plots.keys()].some(idx => occupied.has(idx))
+
+      // Necessary-condition pruning: every uncovered revealed treasure and
+      // unsatisfied crab must still be explainable by at least one placement
+      // that remains selectable from the current DFS state.
+      const anyRemainingPlacement = (groupIndex, startPlacement, left, predicate) => {
+        for (let gi = groupIndex; gi < probabilityGroups.length; gi++) {
+          const group = probabilityGroups[gi]
+          const from = gi === groupIndex && left > 0 ? startPlacement : 0
+          if (gi === groupIndex && left === 0) continue
+          for (let pi = from; pi < group.placements.length; pi++) {
+            const plots = group.placements[pi]
+            if (!placementFitsOccupied(plots)) continue
+            if (predicate(plots)) return true
+          }
+        }
+        return false
+      }
+
+      const remainingConstraintsFeasible = (groupIndex, startPlacement, left) => {
+        for (const [idx, name] of revealEntries) {
+          if (occupied.has(idx)) continue
+          const canCover = anyRemainingPlacement(
+            groupIndex,
+            startPlacement,
+            left,
+            plots => namesMatch(plots.get(idx), name),
+          )
+          if (!canCover) return false
+        }
+
+        for (const neighbours of crabNeighbours) {
+          if (neighbours.some(idx => occupied.has(idx))) continue
+          const canSatisfy = anyRemainingPlacement(
+            groupIndex,
+            startPlacement,
+            left,
+            plots => neighbours.some(idx => plots.has(idx)),
+          )
+          if (!canSatisfy) return false
+        }
+        return true
+      }
+
       // Pick combinations (not permutations) for duplicate instances of a
       // single shape key. Different keys remain distinct daily formation
       // instances, matching the solver's existing global-consistency model.
@@ -1089,6 +1179,8 @@ export function solveTreasures(
           if (allRevealsCovered() && crabsSatisfied()) recordProbabilitySolution()
           return
         }
+
+        if (!remainingConstraintsFeasible(groupIndex, startPlacement, left)) return
 
         const group = probabilityGroups[groupIndex]
         if (left === 0) {
