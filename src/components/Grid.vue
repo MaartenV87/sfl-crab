@@ -64,8 +64,14 @@
           :class="probabilityBadgeClass(index)"
           :title="probabilityTitle(index)"
         >
-          <template v-if="probabilityRank(index)">#{{ probabilityRank(index) }} </template>{{ probabilityPrefix }}{{ probabilityPercent(index) }}%
+          <template v-if="probabilityRank(index)">#{{ probabilityRank(index) }} · </template>{{ probabilityPrefix }}{{ probabilityPercent(index) }}%
         </span>
+
+        <span
+          v-if="showProbability && smartDig?.index === index"
+          class="smart-dig-badge"
+          :title="smartDigTitle"
+        >BEST</span>
 
         <!-- transient shovel dig reveal overlay for freshly-dug tiles.
              Kept outside the tile-img/prediction v-if chain so it doesn't
@@ -180,7 +186,7 @@ const picker = ref(null)
 // able to anchor to its shape. Including all shapes only ever makes deductions
 // more conservative (never a wrong guarantee).
 const { solverPatternKeys } = useLandData()
-const { guaranteed, guaranteedSlugs, guaranteedCandidates, probabilities, globalSolutionCount, probabilityComplete, probabilityMode } = usePredictionEngine(
+const { guaranteed, guaranteedSlugs, guaranteedCandidates, probabilities, globalSolutionCount, probabilityComplete, probabilityMode, smartDig, smartDigRanking } = usePredictionEngine(
   tiles,
   solverPatternKeys,
   toRef(() => showPrediction || showProbability),
@@ -261,8 +267,23 @@ function probabilityRank(index) {
 
 function probabilityBadgeClass(index) {
   const rank = probabilityRank(index)
-  return rank ? [`probability-rank-${rank}`] : []
+  const pct = probabilityPercent(index)
+  if (!rank || pct === null) return []
+  const band = pct >= 50 ? 'probability-band-high'
+    : pct >= 25 ? 'probability-band-medium'
+      : pct >= 10 ? 'probability-band-low'
+        : 'probability-band-very-low'
+  return [band]
 }
+
+const smartDigTitle = computed(() => {
+  if (!smartDig.value) return ''
+  const col = String.fromCharCode(65 + (smartDig.value.index % 10))
+  const row = Math.floor(smartDig.value.index / 10) + 1
+  const expected = Math.round(smartDig.value.expectedElimination * 100)
+  const worst = Math.round(smartDig.value.worstCaseElimination * 100)
+  return `Best next dig: ${col}${row} — expected to eliminate ${expected}% of valid boards (worst case ${worst}%)`
+})
 
 function probabilityPercent(index) {
   if (!showProbability || !probabilityTarget || isRevealed(tiles.value[index])) return null
@@ -349,7 +370,11 @@ function tileClasses(tile, index) {
 
   const rank = probabilityRank(index)
   if (rank && !isRevealed(tile)) {
-    classes.push('probability-top', `probability-rank-${rank}`)
+    classes.push('probability-top')
+  }
+
+  if (showProbability && smartDig.value?.index === index && !isRevealed(tile)) {
+    classes.push('smart-dig-cell')
   }
 
   return classes
@@ -419,32 +444,32 @@ function getTileLabelMark (tile) {
 }
 
 .probability-top {
-  box-shadow: inset 0 0 0 3px var(--prob-rank-color) !important;
+  box-shadow: inset 0 0 0 2px rgba(15, 23, 42, 0.35);
 }
 
-.probability-badge.probability-rank-1,
-.probability-rank-1 { --prob-rank-color: #16a34a; }
-.probability-badge.probability-rank-2,
-.probability-rank-2 { --prob-rank-color: #22c55e; }
-.probability-badge.probability-rank-3,
-.probability-rank-3 { --prob-rank-color: #65a30d; }
-.probability-badge.probability-rank-4,
-.probability-rank-4 { --prob-rank-color: #84cc16; }
-.probability-badge.probability-rank-5,
-.probability-rank-5 { --prob-rank-color: #ca8a04; }
-.probability-badge.probability-rank-6,
-.probability-rank-6 { --prob-rank-color: #eab308; }
-.probability-badge.probability-rank-7,
-.probability-rank-7 { --prob-rank-color: #f59e0b; }
-.probability-badge.probability-rank-8,
-.probability-rank-8 { --prob-rank-color: #f97316; }
-.probability-badge.probability-rank-9,
-.probability-rank-9 { --prob-rank-color: #ea580c; }
-.probability-badge.probability-rank-10,
-.probability-rank-10 { --prob-rank-color: #dc2626; }
+.probability-badge.probability-band-high { background: #16a34a; }
+.probability-badge.probability-band-medium { background: #65a30d; }
+.probability-badge.probability-band-low { background: #ca8a04; }
+.probability-badge.probability-band-very-low { background: #475569; }
 
-.probability-badge[class*='probability-rank-'] {
-  background: var(--prob-rank-color);
+.smart-dig-cell {
+  outline: 4px solid #7c3aed !important;
+  outline-offset: -4px;
+}
+
+.smart-dig-badge {
+  position: absolute;
+  left: 2px;
+  top: 2px;
+  z-index: 4;
+  padding: 1px 3px;
+  border-radius: 4px;
+  font-size: 0.55rem;
+  line-height: 0.9rem;
+  font-weight: 800;
+  background: #7c3aed;
+  color: white;
+  pointer-events: none;
 }
 
 .badge {
