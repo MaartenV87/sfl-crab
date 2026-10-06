@@ -7,7 +7,7 @@
 import { ref, watch } from 'vue'
 import { solveTreasures } from '@/utils/treasureSolver.js'
 
-export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { gridSize = 10, syncRef = null, probabilityRef = null } = {}) {
+export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { gridSize = 10, syncRef = null, probabilityRef = null, probabilityTargetRef = null } = {}) {
   const guaranteed = ref(new Set())
   const guaranteedSlugs = ref(new Map())
   const guaranteedCandidates = ref(new Map())
@@ -37,7 +37,7 @@ export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { grid
       tilesRef.value,
       patternKeysRef.value,
       gridSize,
-      { includeProbabilities: Boolean(probabilityRef?.value) },
+      { includeProbabilities: Boolean(probabilityRef?.value), probabilityTarget: probabilityTargetRef?.value ?? '' },
     )
     guaranteed.value = result.guaranteed
     guaranteedSlugs.value = result.guaranteedSlugs
@@ -92,6 +92,7 @@ export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { grid
   const sources = [tilesRef, patternKeysRef, enabledRef]
   if (syncRef) sources.push(syncRef)
   if (probabilityRef) sources.push(probabilityRef)
+  if (probabilityTargetRef) sources.push(probabilityTargetRef)
 
   watch(
     sources,
