@@ -94,4 +94,36 @@ describe('treasure probability enumeration', () => {
     }
   })
 
+  it('can optimize Smart Dig specifically for the selected treasure', () => {
+    const result = solveTreasures(
+      emptyTiles(3),
+      ['HIEROGLYPH'],
+      3,
+      {
+        includeProbabilities: true,
+        probabilityTarget: 'hieroglyph',
+        probabilitySolutionCap: 100,
+        probabilityNodeCap: 10000,
+      },
+    )
+
+    expect(result.probabilityMode).toBe('exact')
+    expect(result.smartDig).not.toBeNull()
+    expect(result.smartDig.targetAware).toBe(true)
+    expect(result.smartDig.targetInfoGain).toBeGreaterThanOrEqual(0)
+    expect(result.smartDig.targetHitProbability).toBeGreaterThanOrEqual(0)
+
+    for (let i = 1; i < result.smartDigRanking.length; i++) {
+      const prev = result.smartDigRanking[i - 1]
+      const next = result.smartDigRanking[i]
+      expect(
+        prev.targetInfoGain > next.targetInfoGain ||
+        (
+          prev.targetInfoGain === next.targetInfoGain &&
+          prev.targetHitProbability >= next.targetHitProbability
+        )
+      ).toBe(true)
+    }
+  })
+
 })
