@@ -114,6 +114,10 @@ export function solveTreasures(
       smartDig: null,
       smartDigRanking: [],
       targetPlan: null,
+      targetComplete: false,
+      targetRequiredCount: 0,
+      targetFoundCount: 0,
+      targetRemainingCount: 0,
       partial: false,
     }
   }
@@ -148,6 +152,7 @@ export function solveTreasures(
     ...revealedCrab,
     ...revealedTreasureName.keys(),
   ])
+  const actuallyRevealedTreasureName = new Map(revealedTreasureName)
 
   // Formation shapes present on the board. Dedup by key (one instance is enough
   // for local reasoning), and include every shape so a revealed treasure can be
@@ -933,6 +938,10 @@ export function solveTreasures(
   let smartDig = null
   let smartDigRanking = []
   let targetPlan = null
+  let targetComplete = false
+  let targetRequiredCount = 0
+  let targetFoundCount = 0
+  let targetRemainingCount = 0
 
   if (includeProbabilities) {
     const probabilityCounts = new Map() // idx -> Map<slug,count>
@@ -944,6 +953,28 @@ export function solveTreasures(
     const targetSignatureCounts = new Map()
     const targetSolutionCells = [] // exact solutions only; each entry is a small sorted idx[]
     const normalizedProbabilityTarget = slugify(probabilityTarget)
+
+    if (normalizedProbabilityTarget) {
+      for (const key of patternKeys || []) {
+        for (const plot of DIGGING_FORMATIONS[key] || []) {
+          if (slugify(plot.name) === normalizedProbabilityTarget) {
+            targetRequiredCount += 1
+          }
+        }
+      }
+
+      for (const name of actuallyRevealedTreasureName.values()) {
+        if (slugify(name) === normalizedProbabilityTarget) {
+          targetFoundCount += 1
+        }
+      }
+
+      targetRemainingCount = Math.max(0, targetRequiredCount - targetFoundCount)
+      targetComplete =
+        targetRequiredCount > 0 &&
+        targetFoundCount >= targetRequiredCount
+    }
+
     const probabilityGroups = []
     let probabilityGroupsValid = true
 
@@ -1590,11 +1621,27 @@ export function solveTreasures(
         }
 
         smartDig = smartDigRanking[0] ?? null
+
+        if (targetComplete && normalizedProbabilityTarget) {
+          // The selected object has already been found as many times as today's
+          // patterns require. Do not keep suggesting hypothetical extra copies.
+          for (const byName of probabilities.values()) {
+            byName.delete(normalizedProbabilityTarget)
+          }
+          smartDig = null
+          smartDigRanking = []
+          targetPlan = null
+        }
       } else if (probabilityReason === 'too-complex') {
         // Never expose the deterministic DFS prefix as a probability. Fall
         // back to a transparent local-placement estimate instead.
         probabilities = localEstimate
         probabilityMode = 'approximate'
+        if (targetComplete && normalizedProbabilityTarget) {
+          for (const byName of probabilities.values()) {
+            byName.delete(normalizedProbabilityTarget)
+          }
+        }
       } else {
         probabilities = new Map()
         probabilityMode = 'none'
@@ -1618,6 +1665,10 @@ export function solveTreasures(
     smartDig,
     smartDigRanking,
     targetPlan,
+    targetComplete,
+    targetRequiredCount,
+    targetFoundCount,
+    targetRemainingCount,
     partial: false,
   }
 }
