@@ -885,5 +885,154 @@ export function solveTreasures(tiles, patternKeys, gridSize = 10) {
     for (const idx of region) possibleTreasureCells.add(idx)
   }
 
-  return { guaranteed, guaranteedSlugs, guaranteedCandidates, guaranteedFormationCounts, remainingCounts, remainingRegions, possibleTreasureCells, partial: false }
+  // ── Probability layer: enumerate globally-consistent remaining boards ──
+  // This is reporting only: it never feeds the guaranteed deduction above.
+  // Percentages are exact when the search exhausts all assignments. If the
+  // solution cap is reached, probabilityComplete=false and the UI labels the
+  // values as sampled/approximate rather than exact.
+  const probabilityCounts = new Map() // idx -> Map<slug,count>
+  let globalSolutionCount = 0
+  let probabilityComplete = true
+  const PROBABILITY_SOLUTION_CAP = 20000
+
+  const probabilityGroups = []
+  let probabilityGroupsValid = true
+  for (const key of presentKeys) {
+    const need = remainingCount.get(key) ?? 0
+    if (need === 0) continue
+    const placements = need === 1
+      ? enumerateSingleInstanceSurvivors(key)
+      : enumerateAllPlacements(key)
+    if (placements.length < need) {
+      probabilityGroupsValid = false
+      break
+    }
+    probabilityGroups.push({ key, need, placements })
+  }
+  probabilityGroups.sort((a, b) =>
+    (a.placements.length / Math.max(1, a.need)) -
+    (b.placements.length / Math.max(1, b.need))
+  )
+
+  if (probabilityGroupsValid) {
+    const occupied = new Set()
+    const chosen = []
+
+    // Confirmed instances are fixed ground truth and cannot be overlapped.
+    for (const plots of confirmedPlacements) {
+      for (const idx of plots.keys()) occupied.add(idx)
+    }
+
+    const allRevealsCovered = () => {
+      for (const idx of revealedTreasureName.keys()) {
+        if (!occupied.has(idx)) return false
+      }
+      return true
+    }
+
+    // A revealed crab must border at least one treasure in the completed board.
+    // buildPlacement already prevents a treasure from occupying the crab cell.
+    const crabsSatisfied = () => {
+      for (const idx of revealedCrab) {
+        const x = idx % gridSize
+        const y = Math.floor(idx / gridSize)
+        let adjacent = false
+        for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+          const nx = x + dx
+          const ny = y + dy
+          if (inBounds(nx, ny) && occupied.has(ny * gridSize + nx)) {
+            adjacent = true
+            break
+          }
+        }
+        if (!adjacent) return false
+      }
+      return true
+    }
+
+    const recordProbabilitySolution = () => {
+      globalSolutionCount += 1
+      // Count remaining placements only: already-confirmed/revealed treasures
+      // are not useful targets for the probability overlay.
+      const cellsInSolution = new Map()
+      for (const plots of chosen) {
+        for (const [idx, name] of plots) cellsInSolution.set(idx, name)
+      }
+      for (const [idx, name] of cellsInSolution) {
+        const slug = slugify(name)
+        let byName = probabilityCounts.get(idx)
+        if (!byName) {
+          byName = new Map()
+          probabilityCounts.set(idx, byName)
+        }
+        byName.set(slug, (byName.get(slug) ?? 0) + 1)
+      }
+    }
+
+    // Pick combinations (not permutations) for duplicate instances of a shape.
+    const chooseFromGroup = (groupIndex, startPlacement, left) => {
+      if (globalSolutionCount >= PROBABILITY_SOLUTION_CAP) {
+        probabilityComplete = false
+        return
+      }
+      if (groupIndex >= probabilityGroups.length) {
+        if (allRevealsCovered() && crabsSatisfied()) recordProbabilitySolution()
+        return
+      }
+
+      const group = probabilityGroups[groupIndex]
+      if (left === 0) {
+        chooseFromGroup(groupIndex + 1, 0, probabilityGroups[groupIndex + 1]?.need ?? 0)
+        return
+      }
+
+      for (let pi = startPlacement; pi < group.placements.length; pi++) {
+        if (globalSolutionCount >= PROBABILITY_SOLUTION_CAP) {
+          probabilityComplete = false
+          return
+        }
+        const plots = group.placements[pi]
+        const keys = [...plots.keys()]
+        if (keys.some(idx => occupied.has(idx))) continue
+
+        for (const idx of keys) occupied.add(idx)
+        chosen.push(plots)
+        chooseFromGroup(groupIndex, pi + 1, left - 1)
+        chosen.pop()
+        for (const idx of keys) occupied.delete(idx)
+      }
+    }
+
+    if (probabilityGroups.length) {
+      chooseFromGroup(0, 0, probabilityGroups[0].need)
+    } else if (allRevealsCovered() && crabsSatisfied()) {
+      // Everything is already confirmed: one complete board, no remaining targets.
+      globalSolutionCount = 1
+    }
+  }
+
+  const probabilities = new Map()
+  if (globalSolutionCount > 0) {
+    for (const [idx, counts] of probabilityCounts) {
+      const byName = new Map()
+      for (const [slug, count] of counts) {
+        byName.set(slug, count / globalSolutionCount)
+      }
+      probabilities.set(idx, byName)
+    }
+  }
+
+  return {
+    guaranteed,
+    guaranteedSlugs,
+    guaranteedCandidates,
+    guaranteedFormationCounts,
+    remainingCounts,
+    remainingRegions,
+    possibleTreasureCells,
+    probabilities,
+    globalSolutionCount,
+    probabilityComplete,
+    partial: false,
+  }
 }
