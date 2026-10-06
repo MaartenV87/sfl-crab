@@ -15,6 +15,9 @@ export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { grid
   const remainingCounts = ref(new Map())
   const remainingRegions = ref(new Map())
   const possibleTreasureCells = ref(new Set())
+  const probabilities = ref(new Map())
+  const globalSolutionCount = ref(0)
+  const probabilityComplete = ref(true)
 
   const schedule = (typeof window !== 'undefined' && window.requestIdleCallback)
     ? window.requestIdleCallback.bind(window)
@@ -34,6 +37,9 @@ export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { grid
     remainingCounts.value = result.remainingCounts
     remainingRegions.value = result.remainingRegions
     possibleTreasureCells.value = result.possibleTreasureCells
+    probabilities.value = result.probabilities ?? new Map()
+    globalSolutionCount.value = result.globalSolutionCount ?? 0
+    probabilityComplete.value = result.probabilityComplete ?? true
   }
 
   function recompute() {
@@ -47,6 +53,9 @@ export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { grid
       remainingCounts.value = new Map()
       remainingRegions.value = new Map()
       possibleTreasureCells.value = new Set()
+      probabilities.value = new Map()
+      globalSolutionCount.value = 0
+      probabilityComplete.value = true
       return
     }
 
@@ -72,5 +81,5 @@ export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { grid
     { immediate: true, deep: true }
   )
 
-  return { guaranteed, guaranteedSlugs, guaranteedCandidates, guaranteedFormationCounts, remainingCounts, remainingRegions, possibleTreasureCells }
+  return { guaranteed, guaranteedSlugs, guaranteedCandidates, guaranteedFormationCounts, remainingCounts, remainingRegions, possibleTreasureCells, probabilities, globalSolutionCount, probabilityComplete }
 }
