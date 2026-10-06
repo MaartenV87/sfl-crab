@@ -115,6 +115,13 @@
     </div>
 
     <div
+      v-if="showProbability && probabilityTarget && targetComplete"
+      class="target-complete-summary"
+    >
+      ✓ Target complete — {{ targetFoundCount }}/{{ targetRequiredCount }} found. No further digs suggested.
+    </div>
+
+    <div
       v-if="showProbability && targetPlan?.steps?.length"
       class="target-plan-summary"
     >
@@ -211,7 +218,7 @@ const picker = ref(null)
 // able to anchor to its shape. Including all shapes only ever makes deductions
 // more conservative (never a wrong guarantee).
 const { solverPatternKeys } = useLandData()
-const { guaranteed, guaranteedSlugs, guaranteedCandidates, probabilities, globalSolutionCount, probabilityComplete, probabilityMode, smartDig, smartDigRanking, targetPlan } = usePredictionEngine(
+const { guaranteed, guaranteedSlugs, guaranteedCandidates, probabilities, globalSolutionCount, probabilityComplete, probabilityMode, smartDig, smartDigRanking, targetPlan, targetComplete, targetRequiredCount, targetFoundCount, targetRemainingCount } = usePredictionEngine(
   tiles,
   solverPatternKeys,
   toRef(() => showPrediction || showProbability),
@@ -268,7 +275,7 @@ const probabilityPrefix = computed(() =>
 
 const probabilityRanks = computed(() => {
   const ranked = []
-  if (!showProbability || !probabilityTarget) return new Map()
+  if (!showProbability || !probabilityTarget || targetComplete.value) return new Map()
 
   for (let index = 0; index < tiles.value.length; index++) {
     if (isRevealed(tiles.value[index])) continue
@@ -322,7 +329,7 @@ const smartDigTitle = computed(() => {
 })
 
 function probabilityPercent(index) {
-  if (!showProbability || !probabilityTarget || isRevealed(tiles.value[index])) return null
+  if (!showProbability || !probabilityTarget || targetComplete.value || isRevealed(tiles.value[index])) return null
   const p = getTreasureProbability(probabilities.value, index, probabilityTarget)
   if (p <= 0) return null
   return Math.round(p * 100)
@@ -546,6 +553,17 @@ function getTileLabelMark (tile) {
   background: #7c3aed;
   color: white;
   pointer-events: none;
+}
+
+.target-complete-summary {
+  margin-top: 0.5rem;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid rgba(22, 163, 74, 0.45);
+  border-radius: 0.5rem;
+  background: rgba(22, 163, 74, 0.10);
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-align: center;
 }
 
 .target-plan-summary {
