@@ -27,6 +27,7 @@ export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { grid
   const targetRequiredCount = ref(0)
   const targetFoundCount = ref(0)
   const targetRemainingCount = ref(0)
+  const targetLayoutCount = ref(0)
 
   const schedule = (typeof window !== 'undefined' && window.requestIdleCallback)
     ? window.requestIdleCallback.bind(window)
@@ -63,6 +64,7 @@ export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { grid
     targetRequiredCount.value = result.targetRequiredCount ?? 0
     targetFoundCount.value = result.targetFoundCount ?? 0
     targetRemainingCount.value = result.targetRemainingCount ?? 0
+    targetLayoutCount.value = result.targetLayoutCount ?? 0
   }
 
   function recompute() {
@@ -88,6 +90,7 @@ export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { grid
       targetRequiredCount.value = 0
       targetFoundCount.value = 0
       targetRemainingCount.value = 0
+      targetLayoutCount.value = 0
       return
     }
 
@@ -115,5 +118,5 @@ export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { grid
     { immediate: true, deep: true }
   )
 
-  return { guaranteed, guaranteedSlugs, guaranteedCandidates, guaranteedFormationCounts, remainingCounts, remainingRegions, possibleTreasureCells, probabilities, globalSolutionCount, probabilityComplete, probabilityReason, probabilityMode, smartDig, smartDigRanking, targetPlan, targetComplete, targetRequiredCount, targetFoundCount, targetRemainingCount }
+  return { guaranteed, guaranteedSlugs, guaranteedCandidates, guaranteedFormationCounts, remainingCounts, remainingRegions, possibleTreasureCells, probabilities, globalSolutionCount, probabilityComplete, probabilityReason, probabilityMode, smartDig, smartDigRanking, targetPlan, targetComplete, targetRequiredCount, targetFoundCount, targetRemainingCount, targetLayoutCount }
 }
