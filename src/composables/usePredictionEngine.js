@@ -19,6 +19,7 @@ export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { grid
   const globalSolutionCount = ref(0)
   const probabilityComplete = ref(true)
   const probabilityReason = ref(null)
+  const probabilityMode = ref('none')
 
   const schedule = (typeof window !== 'undefined' && window.requestIdleCallback)
     ? window.requestIdleCallback.bind(window)
@@ -47,6 +48,7 @@ export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { grid
     globalSolutionCount.value = result.globalSolutionCount ?? 0
     probabilityComplete.value = result.probabilityComplete ?? true
     probabilityReason.value = result.probabilityReason ?? null
+    probabilityMode.value = result.probabilityMode ?? 'none'
   }
 
   function recompute() {
@@ -64,6 +66,7 @@ export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { grid
       globalSolutionCount.value = 0
       probabilityComplete.value = true
       probabilityReason.value = null
+      probabilityMode.value = 'none'
       return
     }
 
@@ -90,5 +93,5 @@ export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { grid
     { immediate: true, deep: true }
   )
 
-  return { guaranteed, guaranteedSlugs, guaranteedCandidates, guaranteedFormationCounts, remainingCounts, remainingRegions, possibleTreasureCells, probabilities, globalSolutionCount, probabilityComplete, probabilityReason }
+  return { guaranteed, guaranteedSlugs, guaranteedCandidates, guaranteedFormationCounts, remainingCounts, remainingRegions, possibleTreasureCells, probabilities, globalSolutionCount, probabilityComplete, probabilityReason, probabilityMode }
 }
