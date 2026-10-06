@@ -30,6 +30,7 @@
         :hub-replay-url="hubReplayUrl"
         :can-replay="canReplay"
         @open-replay="openReplay()"
+        @copy-text-log="copyAiTextLog"
       />
     </template>
 
@@ -111,9 +112,12 @@ import {
   decodeGridState,
   applySharedMarks,
   isValidEncodedState,
+  copyToClipboard,
 } from '@/utils/gridStateCodec.js'
 import { readLandCacheMeta } from '@/utils/landCache.js'
 import { DIGGING_FORMATIONS } from '@/data/game/diggingFormations.js'
+import { buildDigTextLog } from '@/utils/digTextLog.js'
+import { loadPredictionJournal } from '@/utils/predictionJournal.js'
 
 const route = useRoute()
 const router = useRouter()
@@ -287,6 +291,31 @@ const treasureOrderMap = computed(() => {
   const rawGrid = desert.value.digging?.grid || []
   return buildTreasureOrderMap(rawGrid, gridSize)
 })
+
+async function copyAiTextLog () {
+  const rawGrid = desert.value.digging?.grid || []
+  const text = buildDigTextLog({
+    rawGrid,
+    patternKeys: dailyPatternKeys.value.length
+      ? dailyPatternKeys.value
+      : solverPatternKeys.value,
+    completedPatternKeys: completedPatternKeys.value,
+    manualCompletedIndexes: markedPatternIndexList.value,
+    utcDate: dailyPatternDate.value || new Date().toISOString().slice(0, 10),
+    landId: String(landId || ''),
+    selectedTarget: probabilityTarget.value,
+    predictionJournal: loadPredictionJournal(
+      String(landId || ''),
+      dailyPatternDate.value || new Date().toISOString().slice(0, 10),
+    ),
+    gridSize: 10,
+  })
+
+  const ok = await copyToClipboard(text)
+  if (!ok) {
+    window.prompt('Copy this AI text log:', text)
+  }
+}
 
 onMounted(async () => {
   try {

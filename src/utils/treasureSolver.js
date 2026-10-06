@@ -91,6 +91,7 @@ export function solveTreasures(
   gridSize = 10,
   {
     includeProbabilities = false,
+    probabilityTarget = '',
     probabilitySolutionCap = 20000,
     probabilityNodeCap = 100000,
   } = {},
@@ -109,6 +110,15 @@ export function solveTreasures(
       globalSolutionCount: 0,
       probabilityComplete: true,
       probabilityReason: null,
+      probabilityMode: 'none',
+      smartDig: null,
+      smartDigRanking: [],
+      targetPlan: null,
+      targetComplete: false,
+      targetRequiredCount: 0,
+      targetFoundCount: 0,
+      targetRemainingCount: 0,
+      targetLayoutCount: 0,
       partial: false,
     }
   }
@@ -134,6 +144,16 @@ export function solveTreasures(
     }
     // else: undug / hint-only — unknown, could be treasure
   }
+
+  // Preserve the cells the player has actually dug. revealedTreasureName is
+  // later extended with pseudo-reveals from Guaranteed mode, which must still
+  // remain eligible as future digs for the information-gain ranking.
+  const actuallyRevealedCells = new Set([
+    ...revealedSand,
+    ...revealedCrab,
+    ...revealedTreasureName.keys(),
+  ])
+  const actuallyRevealedTreasureName = new Map(revealedTreasureName)
 
   // Formation shapes present on the board. Dedup by key (one instance is enough
   // for local reasoning), and include every shape so a revealed treasure can be
@@ -915,9 +935,48 @@ export function solveTreasures(
   let globalSolutionCount = 0
   let probabilityComplete = true
   let probabilityReason = null
+  let probabilityMode = 'none'
+  let smartDig = null
+  let smartDigRanking = []
+  let targetPlan = null
+  let targetComplete = false
+  let targetRequiredCount = 0
+  let targetFoundCount = 0
+  let targetRemainingCount = 0
+  let targetLayoutCount = 0
 
   if (includeProbabilities) {
     const probabilityCounts = new Map() // idx -> Map<slug,count>
+    const outcomeCounts = new Map() // idx -> Map<outcome,count>, exact boards only
+    // Target-aware joint distribution: cell -> outcome -> target-layout signature -> count.
+    // This lets Smart Dig value only information that changes where the selected
+    // treasure can be, instead of being distracted by e.g. Old Bottle ambiguity.
+    const targetJointCounts = new Map()
+    const targetSignatureCounts = new Map()
+    const targetSolutionCells = [] // exact solutions only; each entry is a small sorted idx[]
+    const normalizedProbabilityTarget = slugify(probabilityTarget)
+
+    if (normalizedProbabilityTarget) {
+      for (const key of patternKeys || []) {
+        for (const plot of DIGGING_FORMATIONS[key] || []) {
+          if (slugify(plot.name) === normalizedProbabilityTarget) {
+            targetRequiredCount += 1
+          }
+        }
+      }
+
+      for (const name of actuallyRevealedTreasureName.values()) {
+        if (slugify(name) === normalizedProbabilityTarget) {
+          targetFoundCount += 1
+        }
+      }
+
+      targetRemainingCount = Math.max(0, targetRequiredCount - targetFoundCount)
+      targetComplete =
+        targetRequiredCount > 0 &&
+        targetFoundCount >= targetRequiredCount
+    }
+
     const probabilityGroups = []
     let probabilityGroupsValid = true
 
@@ -934,6 +993,43 @@ export function solveTreasures(
       probabilityGroups.push({ key, need, placements })
     }
 
+    // Pre-filter single-instance groups with revealed treasure names that can
+    // only belong to that remaining formation key. This is exact (not a
+    // heuristic) and massively reduces the global search on real boards.
+    const fixedProbabilityCells = new Set()
+    for (const plots of confirmedPlacements) {
+      for (const idx of plots.keys()) fixedProbabilityCells.add(idx)
+    }
+
+    if (probabilityGroupsValid) {
+      const exclusiveRevealsByKey = new Map()
+      for (const [idx, name] of revealedTreasureName) {
+        if (fixedProbabilityCells.has(idx)) continue
+
+        const owners = probabilityGroups.filter(group =>
+          DIGGING_FORMATIONS[group.key]?.some(plot => namesMatch(plot.name, name)),
+        )
+
+        if (owners.length === 1 && owners[0].need === 1) {
+          const key = owners[0].key
+          if (!exclusiveRevealsByKey.has(key)) exclusiveRevealsByKey.set(key, [])
+          exclusiveRevealsByKey.get(key).push([idx, name])
+        }
+      }
+
+      for (const group of probabilityGroups) {
+        const required = exclusiveRevealsByKey.get(group.key)
+        if (!required?.length) continue
+        group.placements = group.placements.filter(plots =>
+          required.every(([idx, name]) => namesMatch(plots.get(idx), name)),
+        )
+        if (group.placements.length < group.need) {
+          probabilityGroupsValid = false
+          break
+        }
+      }
+    }
+
     probabilityGroups.sort((a, b) =>
       (a.placements.length / Math.max(1, a.need)) -
       (b.placements.length / Math.max(1, b.need))
@@ -943,15 +1039,68 @@ export function solveTreasures(
       probabilityComplete = false
       probabilityReason = 'inconsistent'
     } else {
+      // Cheap fallback estimate used only when exact global enumeration is too
+      // large. It respects every local placement constraint already enforced by
+      // buildPlacement/enumerate* but does NOT model cross-formation overlap or
+      // crab coupling. The UI marks these values with "~" so they are never
+      // presented as exact probabilities.
+      const buildLocalEstimate = () => {
+        const combined = new Map() // idx -> Map<slug,p>
+        const mergeProbability = (idx, slug, p) => {
+          if (p <= 0) return
+          let byName = combined.get(idx)
+          if (!byName) {
+            byName = new Map()
+            combined.set(idx, byName)
+          }
+          const prev = byName.get(slug) ?? 0
+          byName.set(slug, 1 - ((1 - prev) * (1 - p)))
+        }
+
+        // Confirmed placements are certain, including their still-undug cells.
+        for (const plots of confirmedPlacements) {
+          for (const [idx, name] of plots) {
+            mergeProbability(idx, slugify(name), 1)
+          }
+        }
+
+        for (const { need, placements } of probabilityGroups) {
+          if (!placements.length) continue
+          const counts = new Map() // idx -> Map<slug,count>
+          for (const plots of placements) {
+            for (const [idx, name] of plots) {
+              const slug = slugify(name)
+              let byName = counts.get(idx)
+              if (!byName) {
+                byName = new Map()
+                counts.set(idx, byName)
+              }
+              byName.set(slug, (byName.get(slug) ?? 0) + 1)
+            }
+          }
+
+          for (const [idx, byName] of counts) {
+            for (const [slug, count] of byName) {
+              const oneInstance = count / placements.length
+              // Approximate duplicated instances as independent draws. This is
+              // intentionally a fallback ranking signal, not an exact board
+              // probability; exact enumeration replaces it whenever feasible.
+              const p = 1 - Math.pow(1 - oneInstance, need)
+              mergeProbability(idx, slug, p)
+            }
+          }
+        }
+        return combined
+      }
+
+      const localEstimate = buildLocalEstimate()
       const occupied = new Set()
       const chosen = []
       let probabilityNodes = 0
       let probabilityAborted = false
 
       // Confirmed instances are fixed ground truth and cannot be overlapped.
-      for (const plots of confirmedPlacements) {
-        for (const idx of plots.keys()) occupied.add(idx)
-      }
+      for (const idx of fixedProbabilityCells) occupied.add(idx)
 
       const allRevealsCovered = () => {
         for (const idx of revealedTreasureName.keys()) {
@@ -1006,6 +1155,30 @@ export function solveTreasures(
           for (const [idx, name] of plots) cellsInSolution.set(idx, name)
         }
 
+        // Target-layout signature contains only still-undug cells of the
+        // selected treasure. Different bottle/clam/etc. layouts with the same
+        // target signature are intentionally treated as the same target state.
+        const targetCells = []
+        if (normalizedProbabilityTarget) {
+          for (const [idx, name] of cellsInSolution) {
+            if (
+              !actuallyRevealedCells.has(idx) &&
+              slugify(name) === normalizedProbabilityTarget
+            ) {
+              targetCells.push(idx)
+            }
+          }
+        }
+        targetCells.sort((a, b) => a - b)
+        const targetSignature = targetCells.join(',')
+        if (normalizedProbabilityTarget) {
+          targetSolutionCells.push(targetCells)
+          targetSignatureCounts.set(
+            targetSignature,
+            (targetSignatureCounts.get(targetSignature) ?? 0) + 1,
+          )
+        }
+
         for (const [idx, name] of cellsInSolution) {
           const slug = slugify(name)
           let byName = probabilityCounts.get(idx)
@@ -1015,6 +1188,115 @@ export function solveTreasures(
           }
           byName.set(slug, (byName.get(slug) ?? 0) + 1)
         }
+
+        // Record the observable result of digging every still-hidden cell for
+        // this complete board. In the game, every non-treasure cell adjacent
+        // orthogonally to a treasure is a Crab; all other cells are Sand.
+        // These partitions let us choose the next dig that, on average, rules
+        // out the largest number of still-valid board configurations.
+        const totalCells = gridSize * gridSize
+        for (let idx = 0; idx < totalCells; idx++) {
+          if (actuallyRevealedCells.has(idx)) continue
+
+          let outcome
+          const treasureName = cellsInSolution.get(idx)
+          if (treasureName !== undefined) {
+            outcome = `treasure:${slugify(treasureName)}`
+          } else {
+            const x = idx % gridSize
+            const y = Math.floor(idx / gridSize)
+            let nextToTreasure = false
+            for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+              const nx = x + dx
+              const ny = y + dy
+              if (!inBounds(nx, ny)) continue
+              if (cellsInSolution.has(ny * gridSize + nx)) {
+                nextToTreasure = true
+                break
+              }
+            }
+            outcome = nextToTreasure ? 'crab' : 'sand'
+          }
+
+          let counts = outcomeCounts.get(idx)
+          if (!counts) {
+            counts = new Map()
+            outcomeCounts.set(idx, counts)
+          }
+          counts.set(outcome, (counts.get(outcome) ?? 0) + 1)
+
+          if (normalizedProbabilityTarget) {
+            let byOutcome = targetJointCounts.get(idx)
+            if (!byOutcome) {
+              byOutcome = new Map()
+              targetJointCounts.set(idx, byOutcome)
+            }
+            let bySignature = byOutcome.get(outcome)
+            if (!bySignature) {
+              bySignature = new Map()
+              byOutcome.set(outcome, bySignature)
+            }
+            bySignature.set(
+              targetSignature,
+              (bySignature.get(targetSignature) ?? 0) + 1,
+            )
+          }
+        }
+      }
+
+      const revealEntries = [...revealedTreasureName]
+      const crabNeighbours = [...revealedCrab].map(idx => {
+        const x = idx % gridSize
+        const y = Math.floor(idx / gridSize)
+        return [[1, 0], [-1, 0], [0, 1], [0, -1]]
+          .map(([dx, dy]) => [x + dx, y + dy])
+          .filter(([nx, ny]) => inBounds(nx, ny))
+          .map(([nx, ny]) => ny * gridSize + nx)
+      })
+
+      const placementFitsOccupied = plots =>
+        ![...plots.keys()].some(idx => occupied.has(idx))
+
+      // Necessary-condition pruning: every uncovered revealed treasure and
+      // unsatisfied crab must still be explainable by at least one placement
+      // that remains selectable from the current DFS state.
+      const anyRemainingPlacement = (groupIndex, startPlacement, left, predicate) => {
+        for (let gi = groupIndex; gi < probabilityGroups.length; gi++) {
+          const group = probabilityGroups[gi]
+          const from = gi === groupIndex && left > 0 ? startPlacement : 0
+          if (gi === groupIndex && left === 0) continue
+          for (let pi = from; pi < group.placements.length; pi++) {
+            const plots = group.placements[pi]
+            if (!placementFitsOccupied(plots)) continue
+            if (predicate(plots)) return true
+          }
+        }
+        return false
+      }
+
+      const remainingConstraintsFeasible = (groupIndex, startPlacement, left) => {
+        for (const [idx, name] of revealEntries) {
+          if (occupied.has(idx)) continue
+          const canCover = anyRemainingPlacement(
+            groupIndex,
+            startPlacement,
+            left,
+            plots => namesMatch(plots.get(idx), name),
+          )
+          if (!canCover) return false
+        }
+
+        for (const neighbours of crabNeighbours) {
+          if (neighbours.some(idx => occupied.has(idx))) continue
+          const canSatisfy = anyRemainingPlacement(
+            groupIndex,
+            startPlacement,
+            left,
+            plots => neighbours.some(idx => plots.has(idx)),
+          )
+          if (!canSatisfy) return false
+        }
+        return true
       }
 
       // Pick combinations (not permutations) for duplicate instances of a
@@ -1032,6 +1314,8 @@ export function solveTreasures(
           if (allRevealsCovered() && crabsSatisfied()) recordProbabilitySolution()
           return
         }
+
+        if (!remainingConstraintsFeasible(groupIndex, startPlacement, left)) return
 
         const group = probabilityGroups[groupIndex]
         if (left === 0) {
@@ -1078,9 +1362,292 @@ export function solveTreasures(
           }
           probabilities.set(idx, byName)
         }
+        probabilityMode = 'exact'
+        targetLayoutCount = targetSignatureCounts.size
+
+        // Exact 3-dig target plan. We search combinations of the strongest
+        // candidate cells and maximize P(hit selected target in <= 3 digs)
+        // across the COMPLETE set of valid boards. This is a static lookahead
+        // plan; after each real dig the solver recalculates, so the next plan
+        // automatically adapts to the observed result.
+        targetPlan = null
+        if (normalizedProbabilityTarget && targetSolutionCells.length === globalSolutionCount) {
+          const candidates = []
+          for (const [idx, byName] of probabilities) {
+            if (actuallyRevealedCells.has(idx)) continue
+            const p = byName.get(normalizedProbabilityTarget) ?? 0
+            if (p > 0) candidates.push({ idx, p })
+          }
+          candidates.sort((a, b) => b.p - a.p || a.idx - b.idx)
+
+          // 30 is enough for complementary low-ranked cells while keeping the
+          // exact C(n,3) bitset search tiny on mobile.
+          const pool = candidates.slice(0, 30)
+          const words = Math.ceil(globalSolutionCount / 32)
+          const bitsets = new Map(pool.map(({ idx }) => [idx, new Uint32Array(words)]))
+          const poolSet = new Set(pool.map(({ idx }) => idx))
+
+          for (let si = 0; si < targetSolutionCells.length; si++) {
+            const word = si >>> 5
+            const bit = (1 << (si & 31)) >>> 0
+            for (const idx of targetSolutionCells[si]) {
+              if (!poolSet.has(idx)) continue
+              bitsets.get(idx)[word] |= bit
+            }
+          }
+
+          const popcount32 = value => {
+            let v = value >>> 0
+            v = v - ((v >>> 1) & 0x55555555)
+            v = (v & 0x33333333) + ((v >>> 2) & 0x33333333)
+            return (((v + (v >>> 4)) & 0x0F0F0F0F) * 0x01010101) >>> 24
+          }
+
+          const unionCount = indexes => {
+            let count = 0
+            for (let wi = 0; wi < words; wi++) {
+              let value = 0
+              for (const idx of indexes) value |= bitsets.get(idx)[wi]
+              count += popcount32(value)
+            }
+            return count
+          }
+
+          let bestCombo = []
+          let bestCount = 0
+          const n = pool.length
+
+          for (let i = 0; i < n; i++) {
+            const combo = [pool[i].idx]
+            const count = unionCount(combo)
+            if (count > bestCount) {
+              bestCount = count
+              bestCombo = combo
+            }
+          }
+
+          if (n >= 2) {
+            bestCount = -1
+            for (let i = 0; i < n - 1; i++) {
+              for (let j = i + 1; j < n; j++) {
+                const combo = [pool[i].idx, pool[j].idx]
+                const count = unionCount(combo)
+                if (count > bestCount) {
+                  bestCount = count
+                  bestCombo = combo
+                }
+              }
+            }
+          }
+
+          if (n >= 3) {
+            bestCount = -1
+            for (let i = 0; i < n - 2; i++) {
+              for (let j = i + 1; j < n - 1; j++) {
+                for (let k = j + 1; k < n; k++) {
+                  const combo = [pool[i].idx, pool[j].idx, pool[k].idx]
+                  const count = unionCount(combo)
+                  if (count > bestCount) {
+                    bestCount = count
+                    bestCombo = combo
+                  }
+                }
+              }
+            }
+          }
+
+          if (bestCombo.length) {
+            // Order the chosen lookahead set by marginal hit gain so every
+            // displayed cumulative percentage is meaningful.
+            const remaining = [...bestCombo]
+            const ordered = []
+            while (remaining.length) {
+              let bestIdx = remaining[0]
+              let bestUnion = -1
+              for (const idx of remaining) {
+                const count = unionCount([...ordered, idx])
+                if (count > bestUnion) {
+                  bestUnion = count
+                  bestIdx = idx
+                }
+              }
+              ordered.push(bestIdx)
+              remaining.splice(remaining.indexOf(bestIdx), 1)
+            }
+
+            const steps = []
+            for (let i = 0; i < ordered.length; i++) {
+              const prefix = ordered.slice(0, i + 1)
+              const hits = unionCount(prefix)
+              const cumulativeProbability = hits / globalSolutionCount
+              const prevHits = i === 0 ? 0 : unionCount(prefix.slice(0, -1))
+              steps.push({
+                step: i + 1,
+                index: ordered[i],
+                directProbability:
+                  probabilities.get(ordered[i])?.get(normalizedProbabilityTarget) ?? 0,
+                cumulativeProbability,
+                marginalProbability: (hits - prevHits) / globalSolutionCount,
+              })
+            }
+
+            targetPlan = {
+              target: normalizedProbabilityTarget,
+              horizon: steps.length,
+              candidatePoolSize: pool.length,
+              exact: true,
+              steps,
+              cumulativeProbability:
+                steps[steps.length - 1]?.cumulativeProbability ?? 0,
+            }
+          }
+        }
+
+        smartDigRanking = []
+
+        if (normalizedProbabilityTarget && targetSignatureCounts.size > 1) {
+          // Target-aware information gain. We measure uncertainty only over
+          // layouts of the selected treasure. If a dig merely distinguishes
+          // two Old Bottle layouts while the Otter Pebble cells stay identical,
+          // its targetInfoGain is exactly zero.
+          const total = globalSolutionCount
+          let baselineCollision = 0
+          for (const count of targetSignatureCounts.values()) {
+            const p = count / total
+            baselineCollision += p * p
+          }
+          const baselineImpurity = 1 - baselineCollision
+
+          for (const [idx, byOutcome] of targetJointCounts) {
+            if (actuallyRevealedCells.has(idx)) continue
+
+            let expectedPosteriorImpurity = 0
+            let targetHitProbability = 0
+            let worstPosteriorImpurity = 0
+            const outcomes = []
+
+            for (const [outcome, bySignature] of byOutcome) {
+              let outcomeCount = 0
+              for (const count of bySignature.values()) outcomeCount += count
+              const pOutcome = outcomeCount / total
+
+              let posteriorCollision = 0
+              for (const count of bySignature.values()) {
+                const p = count / outcomeCount
+                posteriorCollision += p * p
+              }
+              const posteriorImpurity = 1 - posteriorCollision
+              expectedPosteriorImpurity += pOutcome * posteriorImpurity
+              worstPosteriorImpurity = Math.max(
+                worstPosteriorImpurity,
+                posteriorImpurity,
+              )
+
+              if (outcome === `treasure:${normalizedProbabilityTarget}`) {
+                targetHitProbability += pOutcome
+              }
+
+              outcomes.push({
+                outcome,
+                probability: pOutcome,
+                count: outcomeCount,
+                targetPosteriorImpurity: posteriorImpurity,
+              })
+            }
+
+            outcomes.sort((a, b) =>
+              b.probability - a.probability || a.outcome.localeCompare(b.outcome)
+            )
+
+            const rawTargetGain = Math.max(
+              0,
+              baselineImpurity - expectedPosteriorImpurity,
+            )
+            const targetInfoGain = baselineImpurity > 0
+              ? rawTargetGain / baselineImpurity
+              : 0
+            const worstCaseTargetGain = baselineImpurity > 0
+              ? Math.max(0, baselineImpurity - worstPosteriorImpurity) / baselineImpurity
+              : 0
+
+            smartDigRanking.push({
+              index: idx,
+              targetInfoGain,
+              targetHitProbability,
+              worstCaseTargetGain,
+              expectedTargetImpurity: expectedPosteriorImpurity,
+              outcomes,
+              targetAware: true,
+            })
+          }
+
+          smartDigRanking.sort((a, b) =>
+            b.targetInfoGain - a.targetInfoGain ||
+            b.targetHitProbability - a.targetHitProbability ||
+            b.worstCaseTargetGain - a.worstCaseTargetGain ||
+            a.index - b.index
+          )
+        } else {
+          // If no target is selected (or its location is already fully known),
+          // fall back to generic whole-board information gain.
+          for (const [idx, counts] of outcomeCounts) {
+            if (actuallyRevealedCells.has(idx)) continue
+
+            let sumSquares = 0
+            let largestBucket = 0
+            const outcomes = []
+            for (const [outcome, count] of counts) {
+              const p = count / globalSolutionCount
+              sumSquares += p * p
+              largestBucket = Math.max(largestBucket, count)
+              outcomes.push({ outcome, probability: p, count })
+            }
+
+            outcomes.sort((a, b) =>
+              b.probability - a.probability || a.outcome.localeCompare(b.outcome)
+            )
+
+            smartDigRanking.push({
+              index: idx,
+              expectedElimination: 1 - sumSquares,
+              worstCaseElimination: 1 - (largestBucket / globalSolutionCount),
+              outcomes,
+              targetAware: false,
+            })
+          }
+
+          smartDigRanking.sort((a, b) =>
+            b.expectedElimination - a.expectedElimination ||
+            b.worstCaseElimination - a.worstCaseElimination ||
+            a.index - b.index
+          )
+        }
+
+        smartDig = smartDigRanking[0] ?? null
+
+        if (targetComplete && normalizedProbabilityTarget) {
+          // The selected object has already been found as many times as today's
+          // patterns require. Do not keep suggesting hypothetical extra copies.
+          for (const byName of probabilities.values()) {
+            byName.delete(normalizedProbabilityTarget)
+          }
+          smartDig = null
+          smartDigRanking = []
+          targetPlan = null
+        }
+      } else if (probabilityReason === 'too-complex') {
+        // Never expose the deterministic DFS prefix as a probability. Fall
+        // back to a transparent local-placement estimate instead.
+        probabilities = localEstimate
+        probabilityMode = 'approximate'
+        if (targetComplete && normalizedProbabilityTarget) {
+          for (const byName of probabilities.values()) {
+            byName.delete(normalizedProbabilityTarget)
+          }
+        }
       } else {
-        // Never expose a deterministic prefix as though it were a probability.
         probabilities = new Map()
+        probabilityMode = 'none'
       }
     }
   }
@@ -1097,6 +1664,15 @@ export function solveTreasures(
     globalSolutionCount,
     probabilityComplete,
     probabilityReason,
+    probabilityMode,
+    smartDig,
+    smartDigRanking,
+    targetPlan,
+    targetComplete,
+    targetRequiredCount,
+    targetFoundCount,
+    targetRemainingCount,
+    targetLayoutCount,
     partial: false,
   }
 }
