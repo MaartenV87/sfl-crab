@@ -11,6 +11,27 @@
       />
       Guaranteed
     </label>
+    <label class="flex items-center rounded border border-base-300 p-2 tooltip cursor-pointer" data-tip="Show the percentage of globally valid boards containing the selected treasure in each cell">
+      <input
+        type="checkbox"
+        :checked="showProbability"
+        @change="$emit('update:showProbability', $event.target.checked)"
+        class="checkbox checkbox-sm mr-1 text-nowrap"
+      />
+      Probability
+    </label>
+    <select
+      v-if="showProbability"
+      class="select select-bordered select-sm max-w-44"
+      :value="probabilityTarget"
+      @change="$emit('update:probabilityTarget', $event.target.value)"
+      aria-label="Treasure probability target"
+    >
+      <option value="">Choose treasure…</option>
+      <option v-for="slug in probabilityTargets" :key="slug" :value="slug">
+        {{ treasureDisplayName(slug) }}
+      </option>
+    </select>
     <button
       type="button"
       class="btn btn-info btn-sm sm:btn-md"
@@ -117,6 +138,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { resolveLandRoute } from '@/utils/landRoutes.js'
 import { useApiEnvironment } from '@/composables/useApiEnvironment.js'
 import { useFeedbackModal } from '@/composables/useFeedbackModal.js'
+import { treasureDisplayName } from '@/utils/treasureProbability.js'
 
 const route  = useRoute()
 const router = useRouter()
@@ -130,6 +152,9 @@ defineProps({
   showTreasureOrder: { type: Boolean, default: false },
   hideLandIdInUrl: { type: Boolean, default: false },
   showPrediction: { type: Boolean, default: false },
+  showProbability: { type: Boolean, default: false },
+  probabilityTarget: { type: String, default: '' },
+  probabilityTargets: { type: Array, default: () => [] },
   digDaySyncStatus: { type: String, default: 'idle' },
   digDayUpdatedAt: { type: String, default: null },
   digDaySyncError: { type: String, default: null },
@@ -171,7 +196,7 @@ async function copyMarksLink (event) {
 }
 
 // we'll emit update:showTreasureOrder via @change above
-defineEmits(['update:showTreasureOrder', 'update:hideLandIdInUrl', 'update:showPrediction', 'open-replay'])
+defineEmits(['update:showTreasureOrder', 'update:hideLandIdInUrl', 'update:showPrediction', 'update:showProbability', 'update:probabilityTarget', 'open-replay'])
 
 function clearLandId () {
   const test = isTestServer.value
