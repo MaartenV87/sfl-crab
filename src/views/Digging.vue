@@ -144,6 +144,7 @@ const defaults = { visitedFarmState: { inventory: {}, desert: { digging: { grid:
 const {
   desert,
   patternKeys,
+  solverPatternKeys,
   dailyPatternKeys,
   dailyPatternDate,
   completedPatternKeys,
@@ -151,7 +152,7 @@ const {
 const hasDailyPatterns = computed(() => dailyPatternKeys.value.length > 0)
 const probabilityTargets = computed(() => {
   const slugs = new Set()
-  for (const key of dailyPatternKeys.value) {
+  for (const key of solverPatternKeys.value) {
     for (const plot of DIGGING_FORMATIONS[key] || []) {
       const slug = String(plot.name || '').toLowerCase().replace(/[\s_]+/g, '_').trim()
       if (slug) slugs.add(slug)

@@ -7,7 +7,7 @@
 import { ref, watch } from 'vue'
 import { solveTreasures } from '@/utils/treasureSolver.js'
 
-export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { gridSize = 10, syncRef = null } = {}) {
+export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { gridSize = 10, syncRef = null, probabilityRef = null } = {}) {
   const guaranteed = ref(new Set())
   const guaranteedSlugs = ref(new Map())
   const guaranteedCandidates = ref(new Map())
@@ -18,6 +18,7 @@ export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { grid
   const probabilities = ref(new Map())
   const globalSolutionCount = ref(0)
   const probabilityComplete = ref(true)
+  const probabilityReason = ref(null)
 
   const schedule = (typeof window !== 'undefined' && window.requestIdleCallback)
     ? window.requestIdleCallback.bind(window)
@@ -29,7 +30,12 @@ export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { grid
   let idleId = null
 
   function runSolve() {
-    const result = solveTreasures(tilesRef.value, patternKeysRef.value, gridSize)
+    const result = solveTreasures(
+      tilesRef.value,
+      patternKeysRef.value,
+      gridSize,
+      { includeProbabilities: Boolean(probabilityRef?.value) },
+    )
     guaranteed.value = result.guaranteed
     guaranteedSlugs.value = result.guaranteedSlugs
     guaranteedCandidates.value = result.guaranteedCandidates
@@ -40,6 +46,7 @@ export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { grid
     probabilities.value = result.probabilities ?? new Map()
     globalSolutionCount.value = result.globalSolutionCount ?? 0
     probabilityComplete.value = result.probabilityComplete ?? true
+    probabilityReason.value = result.probabilityReason ?? null
   }
 
   function recompute() {
@@ -56,6 +63,7 @@ export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { grid
       probabilities.value = new Map()
       globalSolutionCount.value = 0
       probabilityComplete.value = true
+      probabilityReason.value = null
       return
     }
 
@@ -74,6 +82,7 @@ export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { grid
 
   const sources = [tilesRef, patternKeysRef, enabledRef]
   if (syncRef) sources.push(syncRef)
+  if (probabilityRef) sources.push(probabilityRef)
 
   watch(
     sources,
@@ -81,5 +90,5 @@ export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { grid
     { immediate: true, deep: true }
   )
 
-  return { guaranteed, guaranteedSlugs, guaranteedCandidates, guaranteedFormationCounts, remainingCounts, remainingRegions, possibleTreasureCells, probabilities, globalSolutionCount, probabilityComplete }
+  return { guaranteed, guaranteedSlugs, guaranteedCandidates, guaranteedFormationCounts, remainingCounts, remainingRegions, possibleTreasureCells, probabilities, globalSolutionCount, probabilityComplete, probabilityReason }
 }
