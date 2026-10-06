@@ -109,6 +109,7 @@ export function solveTreasures(
       globalSolutionCount: 0,
       probabilityComplete: true,
       probabilityReason: null,
+      probabilityMode: 'none',
       partial: false,
     }
   }
@@ -915,6 +916,7 @@ export function solveTreasures(
   let globalSolutionCount = 0
   let probabilityComplete = true
   let probabilityReason = null
+  let probabilityMode = 'none'
 
   if (includeProbabilities) {
     const probabilityCounts = new Map() // idx -> Map<slug,count>
@@ -943,6 +945,61 @@ export function solveTreasures(
       probabilityComplete = false
       probabilityReason = 'inconsistent'
     } else {
+      // Cheap fallback estimate used only when exact global enumeration is too
+      // large. It respects every local placement constraint already enforced by
+      // buildPlacement/enumerate* but does NOT model cross-formation overlap or
+      // crab coupling. The UI marks these values with "~" so they are never
+      // presented as exact probabilities.
+      const buildLocalEstimate = () => {
+        const combined = new Map() // idx -> Map<slug,p>
+        const mergeProbability = (idx, slug, p) => {
+          if (p <= 0) return
+          let byName = combined.get(idx)
+          if (!byName) {
+            byName = new Map()
+            combined.set(idx, byName)
+          }
+          const prev = byName.get(slug) ?? 0
+          byName.set(slug, 1 - ((1 - prev) * (1 - p)))
+        }
+
+        // Confirmed placements are certain, including their still-undug cells.
+        for (const plots of confirmedPlacements) {
+          for (const [idx, name] of plots) {
+            mergeProbability(idx, slugify(name), 1)
+          }
+        }
+
+        for (const { need, placements } of probabilityGroups) {
+          if (!placements.length) continue
+          const counts = new Map() // idx -> Map<slug,count>
+          for (const plots of placements) {
+            for (const [idx, name] of plots) {
+              const slug = slugify(name)
+              let byName = counts.get(idx)
+              if (!byName) {
+                byName = new Map()
+                counts.set(idx, byName)
+              }
+              byName.set(slug, (byName.get(slug) ?? 0) + 1)
+            }
+          }
+
+          for (const [idx, byName] of counts) {
+            for (const [slug, count] of byName) {
+              const oneInstance = count / placements.length
+              // Approximate duplicated instances as independent draws. This is
+              // intentionally a fallback ranking signal, not an exact board
+              // probability; exact enumeration replaces it whenever feasible.
+              const p = 1 - Math.pow(1 - oneInstance, need)
+              mergeProbability(idx, slug, p)
+            }
+          }
+        }
+        return combined
+      }
+
+      const localEstimate = buildLocalEstimate()
       const occupied = new Set()
       const chosen = []
       let probabilityNodes = 0
@@ -1078,9 +1135,15 @@ export function solveTreasures(
           }
           probabilities.set(idx, byName)
         }
+        probabilityMode = 'exact'
+      } else if (probabilityReason === 'too-complex') {
+        // Never expose the deterministic DFS prefix as a probability. Fall
+        // back to a transparent local-placement estimate instead.
+        probabilities = localEstimate
+        probabilityMode = 'approximate'
       } else {
-        // Never expose a deterministic prefix as though it were a probability.
         probabilities = new Map()
+        probabilityMode = 'none'
       }
     }
   }
@@ -1097,6 +1160,7 @@ export function solveTreasures(
     globalSolutionCount,
     probabilityComplete,
     probabilityReason,
+    probabilityMode,
     partial: false,
   }
 }
