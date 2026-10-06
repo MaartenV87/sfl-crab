@@ -68,6 +68,12 @@
         </span>
 
         <span
+          v-if="showProbability && targetPlanStep(index)"
+          class="plan-step-badge"
+          :title="targetPlanStepTitle(index)"
+        >P{{ targetPlanStep(index).step }}</span>
+
+        <span
           v-if="showProbability && smartDig?.index === index"
           class="smart-dig-badge"
           :title="smartDigTitle"
@@ -108,6 +114,23 @@
       </div>
     </div>
 
+    <div
+      v-if="showProbability && targetPlan?.steps?.length"
+      class="target-plan-summary"
+    >
+      <div class="font-semibold">Target plan</div>
+      <div class="flex flex-wrap gap-x-3 gap-y-1 justify-center">
+        <span
+          v-for="step in targetPlan.steps"
+          :key="step.index"
+        >
+          {{ cellLabel(step.index) }}:
+          <strong>{{ Math.round(step.cumulativeProbability * 100) }}%</strong>
+          within {{ step.step }} {{ step.step === 1 ? 'dig' : 'digs' }}
+        </span>
+      </div>
+    </div>
+
     <!-- backdrop to close picker -->
     <div v-if="picker" class="fixed inset-0 z-40" @click="picker = null"></div>
 
@@ -131,6 +154,8 @@
       @pick="onHintPicked"
       @report="onReportFromPicker"
       :possibleTreasures="possibleTreasures"
+      :cell-probabilities="pickerProbabilityItems"
+      :probability-approximate="probabilityMode === 'approximate'"
     />
 
     <!-- BottomGridInfo component -->
@@ -152,7 +177,7 @@ import { useReliableAssets } from '@/composables/useReliableAssets.js'
 import { getLabelFromTile } from '@/utils/hintLabel.js'
 import { isRevealed } from '@/utils/tileState.js'
 import { useFeedbackModal } from '@/composables/useFeedbackModal.js'
-import { getTreasureProbability } from '@/utils/treasureProbability.js'
+import { getTreasureProbability, treasureDisplayName } from '@/utils/treasureProbability.js'
 
 // Use reliable assets composable
 const { getImageSrc } = useReliableAssets()
@@ -186,7 +211,7 @@ const picker = ref(null)
 // able to anchor to its shape. Including all shapes only ever makes deductions
 // more conservative (never a wrong guarantee).
 const { solverPatternKeys } = useLandData()
-const { guaranteed, guaranteedSlugs, guaranteedCandidates, probabilities, globalSolutionCount, probabilityComplete, probabilityMode, smartDig, smartDigRanking } = usePredictionEngine(
+const { guaranteed, guaranteedSlugs, guaranteedCandidates, probabilities, globalSolutionCount, probabilityComplete, probabilityMode, smartDig, smartDigRanking, targetPlan } = usePredictionEngine(
   tiles,
   solverPatternKeys,
   toRef(() => showPrediction || showProbability),
@@ -313,6 +338,42 @@ function probabilityTitle(index) {
   return `${rankText}${mode === 'approximate' ? '~' : ''}${pct}% ${label} (${mode}${mode === 'exact' ? `, ${globalSolutionCount.value} valid boards` : ''})`
 }
 
+const pickerProbabilityItems = computed(() => {
+  if (!showProbability || !picker.value) return []
+  const byName = probabilities.value.get(picker.value.tileIndex)
+  if (!byName) return []
+
+  return [...byName.entries()]
+    .filter(([, p]) => p > 0)
+    .map(([slug, p]) => ({
+      slug,
+      label: treasureDisplayName(slug),
+      percent: Math.round(p * 100),
+      probability: p,
+    }))
+    .sort((a, b) =>
+      b.probability - a.probability || a.label.localeCompare(b.label)
+    )
+})
+
+function targetPlanStep(index) {
+  return targetPlan.value?.steps?.find(step => step.index === index) ?? null
+}
+
+function cellLabel(index) {
+  const col = String.fromCharCode(65 + (index % 10))
+  const row = Math.floor(index / 10) + 1
+  return `${col}${row}`
+}
+
+function targetPlanStepTitle(index) {
+  const step = targetPlanStep(index)
+  if (!step) return ''
+  const cumulative = Math.round(step.cumulativeProbability * 100)
+  const direct = Math.round(step.directProbability * 100)
+  return `Plan step ${step.step}: ${cellLabel(index)} — ${direct}% direct hit, ${cumulative}% combined chance within ${step.step} dig${step.step === 1 ? '' : 's'}`
+}
+
 // static labels for overlays
 const colLabels = computed(() =>
   Array.from({ length: 10 }, (_, i) =>
@@ -382,6 +443,10 @@ function tileClasses(tile, index) {
   const rank = probabilityRank(index)
   if (rank && !isRevealed(tile)) {
     classes.push('probability-top')
+  }
+
+  if (showProbability && targetPlanStep(index) && !isRevealed(tile)) {
+    classes.push('target-plan-cell')
   }
 
   if (showProbability && smartDig.value?.index === index && !isRevealed(tile)) {
@@ -479,6 +544,35 @@ function getTileLabelMark (tile) {
   line-height: 0.9rem;
   font-weight: 800;
   background: #7c3aed;
+  color: white;
+  pointer-events: none;
+}
+
+.target-plan-summary {
+  margin-top: 0.5rem;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid rgba(124, 58, 237, 0.35);
+  border-radius: 0.5rem;
+  background: rgba(124, 58, 237, 0.08);
+  font-size: 0.7rem;
+  text-align: center;
+}
+
+.target-plan-cell {
+  box-shadow: inset 0 0 0 2px #0ea5e9 !important;
+}
+
+.plan-step-badge {
+  position: absolute;
+  left: 2px;
+  bottom: 2px;
+  z-index: 4;
+  padding: 1px 3px;
+  border-radius: 4px;
+  font-size: 0.55rem;
+  line-height: 0.9rem;
+  font-weight: 800;
+  background: #0ea5e9;
   color: white;
   pointer-events: none;
 }
