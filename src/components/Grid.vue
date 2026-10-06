@@ -151,7 +151,7 @@ const { getImageSrc } = useReliableAssets()
 const possibleTreasures = useTodayTreasureNames();
 console.log("Trigger computed value:", possibleTreasures.value); // this seems to forcely trigger the computed value
 // your existing props
-const { showTreasureOrder, treasureOrderMap, showLandIdInUrl, showPrediction, interactive } = defineProps({
+const { showTreasureOrder, treasureOrderMap, showLandIdInUrl, showPrediction, interactive, showProbability, probabilityTarget } = defineProps({
   showTreasureOrder: { type: Boolean, default: false },
   treasureOrderMap:  { type: Array,   default: () => [] },
   showLandIdInUrl:   { type: Boolean, default: true },
@@ -180,7 +180,7 @@ const { solverPatternKeys } = useLandData()
 const { guaranteed, guaranteedSlugs, guaranteedCandidates, probabilities, globalSolutionCount, probabilityComplete } = usePredictionEngine(
   tiles,
   solverPatternKeys,
-  toRef(() => showPrediction),
+  toRef(() => showPrediction || showProbability),
 )
 
 // Feed the guaranteed set into the engine as a treasure mask so a crab adjacent
