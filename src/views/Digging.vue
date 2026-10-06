@@ -21,6 +21,9 @@
         v-model:showTreasureOrder="showTreasureOrder"
         v-model:hideLandIdInUrl="hideLandIdInUrl"
         v-model:showPrediction="showPrediction"
+        v-model:showProbability="showProbability"
+        v-model:probabilityTarget="probabilityTarget"
+        :probability-targets="probabilityTargets"
         :dig-day-sync-status="digDaySyncStatus"
         :dig-day-updated-at="digDayUpdatedAt"
         :dig-day-sync-error="digDaySyncError"
@@ -43,6 +46,8 @@
         :treasure-order-map="treasureOrderMap"
         :show-land-id-in-url="!hideLandIdInUrl"
         :show-prediction="showPrediction"
+        :show-probability="showProbability"
+        :probability-target="probabilityTarget"
         :interactive="true"
       />
     </template>
@@ -108,6 +113,7 @@ import {
   isValidEncodedState,
 } from '@/utils/gridStateCodec.js'
 import { readLandCacheMeta } from '@/utils/landCache.js'
+import { DIGGING_FORMATIONS } from '@/data/game/diggingFormations.js'
 
 const route = useRoute()
 const router = useRouter()
@@ -126,6 +132,12 @@ const hideLandIdInUrl = useLocalStorage(
 const showPrediction = useLocalStorage(
   `showPrediction-${landId}`, true
 )
+const showProbability = useLocalStorage(
+  `showProbability-${landId}`, false
+)
+const probabilityTarget = useLocalStorage(
+  `probabilityTarget-${landId}`, ''
+)
 
 const grid = useGridManager(landId)
 const defaults = { visitedFarmState: { inventory: {}, desert: { digging: { grid: [] } } } }
@@ -137,6 +149,22 @@ const {
   completedPatternKeys,
 } = useLandData(defaults)
 const hasDailyPatterns = computed(() => dailyPatternKeys.value.length > 0)
+const probabilityTargets = computed(() => {
+  const slugs = new Set()
+  for (const key of dailyPatternKeys.value) {
+    for (const plot of DIGGING_FORMATIONS[key] || []) {
+      const slug = String(plot.name || '').toLowerCase().replace(/[\s_]+/g, '_').trim()
+      if (slug) slugs.add(slug)
+    }
+  }
+  return [...slugs].sort()
+})
+
+watch(probabilityTargets, targets => {
+  if (probabilityTarget.value && !targets.includes(probabilityTarget.value)) {
+    probabilityTarget.value = ''
+  }
+}, { immediate: true })
 
 const { markedIndexes: markedPatternIndexes } = usePatternMarks(landId)
 const markedPatternIndexList = computed(() => [...markedPatternIndexes.value])
