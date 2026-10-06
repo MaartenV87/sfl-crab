@@ -58,7 +58,7 @@ describe('treasure probability enumeration', () => {
     expect(result.probabilities.get(3)?.get('hieroglyph')).toBe(1)
   })
 
-  it('does not expose biased prefix percentages when the solution cap is hit', () => {
+  it('falls back to explicitly approximate local percentages when the exact search cap is hit', () => {
     const result = solveTreasures(
       emptyTiles(3),
       ['HIEROGLYPH'],
@@ -68,6 +68,7 @@ describe('treasure probability enumeration', () => {
 
     expect(result.probabilityComplete).toBe(false)
     expect(result.probabilityReason).toBe('too-complex')
-    expect(result.probabilities.size).toBe(0)
+    expect(result.probabilityMode).toBe('approximate')
+    expect(result.probabilities.size).toBeGreaterThan(0)
   })
 })
