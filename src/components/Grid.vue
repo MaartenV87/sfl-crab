@@ -61,8 +61,11 @@
         <span
           v-if="probabilityPercent(index) !== null"
           class="probability-badge"
+          :class="probabilityBadgeClass(index)"
           :title="probabilityTitle(index)"
-        >{{ probabilityPrefix }}{{ probabilityPercent(index) }}%</span>
+        >
+          <template v-if="probabilityRank(index)">#{{ probabilityRank(index) }} </template>{{ probabilityPrefix }}{{ probabilityPercent(index) }}%
+        </span>
 
         <!-- transient shovel dig reveal overlay for freshly-dug tiles.
              Kept outside the tile-img/prediction v-if chain so it doesn't
@@ -229,6 +232,38 @@ const probabilityPrefix = computed(() =>
   probabilityMode.value === 'approximate' ? '~' : ''
 )
 
+const probabilityRanks = computed(() => {
+  const ranked = []
+  if (!showProbability || !probabilityTarget) return new Map()
+
+  for (let index = 0; index < tiles.value.length; index++) {
+    if (isRevealed(tiles.value[index])) continue
+    const probability = getTreasureProbability(
+      probabilities.value,
+      index,
+      probabilityTarget,
+    )
+    if (probability > 0) ranked.push({ index, probability })
+  }
+
+  ranked.sort((a, b) =>
+    b.probability - a.probability || a.index - b.index
+  )
+
+  return new Map(
+    ranked.slice(0, 10).map((entry, i) => [entry.index, i + 1]),
+  )
+})
+
+function probabilityRank(index) {
+  return probabilityRanks.value.get(index) ?? null
+}
+
+function probabilityBadgeClass(index) {
+  const rank = probabilityRank(index)
+  return rank ? [`probability-rank-${rank}`] : []
+}
+
 function probabilityPercent(index) {
   if (!showProbability || !probabilityTarget || isRevealed(tiles.value[index])) return null
   const p = getTreasureProbability(probabilities.value, index, probabilityTarget)
@@ -241,7 +276,9 @@ function probabilityTitle(index) {
   if (pct === null) return ''
   const label = probabilityTarget.replace(/_/g, ' ')
   const mode = probabilityMode.value === 'exact' ? 'exact' : 'approximate'
-  return `${mode === 'approximate' ? '~' : ''}${pct}% ${label} (${mode}${mode === 'exact' ? `, ${globalSolutionCount.value} valid boards` : ''})`
+  const rank = probabilityRank(index)
+  const rankText = rank ? `Rank #${rank} — ` : ''
+  return `${rankText}${mode === 'approximate' ? '~' : ''}${pct}% ${label} (${mode}${mode === 'exact' ? `, ${globalSolutionCount.value} valid boards` : ''})`
 }
 
 // static labels for overlays
@@ -306,10 +343,16 @@ function normalizeTile(tile) {
 // hint/near marks (e.g. the near-crab yellow overlay) so the guaranteed green
 // reads cleanly — mirrors PracticeGrid.outerClasses ordering (commit ebfc06895).
 function tileClasses(tile, index) {
-  if (showPrediction && guaranteed.value.has(index) && !isRevealed(tile)) {
-    return ['predicted-guaranteed']
+  const classes = showPrediction && guaranteed.value.has(index) && !isRevealed(tile)
+    ? ['predicted-guaranteed']
+    : [...normalizeTile(tile)]
+
+  const rank = probabilityRank(index)
+  if (rank && !isRevealed(tile)) {
+    classes.push('probability-top', `probability-rank-${rank}`)
   }
-  return normalizeTile(tile)
+
+  return classes
 }
 
 function getTileLabelMark (tile) {
@@ -373,6 +416,35 @@ function getTileLabelMark (tile) {
   background: rgba(0, 0, 0, 0.72);
   color: white;
   pointer-events: none;
+}
+
+.probability-top {
+  box-shadow: inset 0 0 0 3px var(--prob-rank-color) !important;
+}
+
+.probability-badge.probability-rank-1,
+.probability-rank-1 { --prob-rank-color: #16a34a; }
+.probability-badge.probability-rank-2,
+.probability-rank-2 { --prob-rank-color: #22c55e; }
+.probability-badge.probability-rank-3,
+.probability-rank-3 { --prob-rank-color: #65a30d; }
+.probability-badge.probability-rank-4,
+.probability-rank-4 { --prob-rank-color: #84cc16; }
+.probability-badge.probability-rank-5,
+.probability-rank-5 { --prob-rank-color: #ca8a04; }
+.probability-badge.probability-rank-6,
+.probability-rank-6 { --prob-rank-color: #eab308; }
+.probability-badge.probability-rank-7,
+.probability-rank-7 { --prob-rank-color: #f59e0b; }
+.probability-badge.probability-rank-8,
+.probability-rank-8 { --prob-rank-color: #f97316; }
+.probability-badge.probability-rank-9,
+.probability-rank-9 { --prob-rank-color: #ea580c; }
+.probability-badge.probability-rank-10,
+.probability-rank-10 { --prob-rank-color: #dc2626; }
+
+.probability-badge[class*='probability-rank-'] {
+  background: var(--prob-rank-color);
 }
 
 .badge {
