@@ -63,6 +63,15 @@
             <button
               type="button"
               class="btn btn-outline btn-sm w-full"
+              @click="copyTextLog"
+              title="Copy a structured text log of today's patterns, moves and finds"
+            >
+              {{ textLogCopied ? 'Text log copied' : 'Copy AI Text Log' }}
+            </button>
+
+            <button
+              type="button"
+              class="btn btn-outline btn-sm w-full"
               title="Report a bug or issue"
               @click="openFeedback({ source: 'more-menu' })"
             >
@@ -163,7 +172,9 @@ defineProps({
 })
 
 const marksLinkCopied = ref(false)
+const textLogCopied = ref(false)
 let marksLinkCopiedTimer = null
+let textLogCopiedTimer = null
 
 async function copyMarksLink (event) {
   let recipientId = route.params.landId
@@ -196,7 +207,16 @@ async function copyMarksLink (event) {
 }
 
 // we'll emit update:showTreasureOrder via @change above
-defineEmits(['update:showTreasureOrder', 'update:hideLandIdInUrl', 'update:showPrediction', 'update:showProbability', 'update:probabilityTarget', 'open-replay'])
+const emit = defineEmits(['update:showTreasureOrder', 'update:hideLandIdInUrl', 'update:showPrediction', 'update:showProbability', 'update:probabilityTarget', 'open-replay', 'copy-text-log'])
+
+function copyTextLog () {
+  emit('copy-text-log')
+  textLogCopied.value = true
+  if (textLogCopiedTimer) clearTimeout(textLogCopiedTimer)
+  textLogCopiedTimer = setTimeout(() => {
+    textLogCopied.value = false
+  }, 2000)
+}
 
 function clearLandId () {
   const test = isTestServer.value
