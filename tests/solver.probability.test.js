@@ -71,4 +71,27 @@ describe('treasure probability enumeration', () => {
     expect(result.probabilityMode).toBe('approximate')
     expect(result.probabilities.size).toBeGreaterThan(0)
   })
+
+  it('ranks the most informative next dig from exact global outcomes', () => {
+    const result = solveTreasures(
+      emptyTiles(3),
+      ['HIEROGLYPH'],
+      3,
+      { includeProbabilities: true, probabilitySolutionCap: 100, probabilityNodeCap: 10000 },
+    )
+
+    expect(result.probabilityMode).toBe('exact')
+    expect(result.smartDig).not.toBeNull()
+    expect(result.smartDigRanking.length).toBeGreaterThan(0)
+    expect(result.smartDig.expectedElimination).toBeGreaterThan(0)
+
+    // Ranking must be sorted descending by expected elimination.
+    for (let i = 1; i < result.smartDigRanking.length; i++) {
+      expect(
+        result.smartDigRanking[i - 1].expectedElimination
+          >= result.smartDigRanking[i].expectedElimination
+      ).toBe(true)
+    }
+  })
+
 })
