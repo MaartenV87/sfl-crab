@@ -118,6 +118,7 @@ export function solveTreasures(
       targetRequiredCount: 0,
       targetFoundCount: 0,
       targetRemainingCount: 0,
+      targetLayoutCount: 0,
       partial: false,
     }
   }
@@ -942,6 +943,7 @@ export function solveTreasures(
   let targetRequiredCount = 0
   let targetFoundCount = 0
   let targetRemainingCount = 0
+  let targetLayoutCount = 0
 
   if (includeProbabilities) {
     const probabilityCounts = new Map() // idx -> Map<slug,count>
@@ -1361,6 +1363,7 @@ export function solveTreasures(
           probabilities.set(idx, byName)
         }
         probabilityMode = 'exact'
+        targetLayoutCount = targetSignatureCounts.size
 
         // Exact 3-dig target plan. We search combinations of the strongest
         // candidate cells and maximize P(hit selected target in <= 3 digs)
@@ -1669,6 +1672,7 @@ export function solveTreasures(
     targetRequiredCount,
     targetFoundCount,
     targetRemainingCount,
+    targetLayoutCount,
     partial: false,
   }
 }
