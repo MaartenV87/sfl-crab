@@ -181,6 +181,7 @@ const { guaranteed, guaranteedSlugs, guaranteedCandidates, probabilities, global
   tiles,
   solverPatternKeys,
   toRef(() => showPrediction || showProbability),
+  { probabilityRef: toRef(() => showProbability) },
 )
 
 // Feed the guaranteed set into the engine as a treasure mask so a crab adjacent
