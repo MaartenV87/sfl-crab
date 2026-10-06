@@ -185,6 +185,8 @@ import { getLabelFromTile } from '@/utils/hintLabel.js'
 import { isRevealed } from '@/utils/tileState.js'
 import { useFeedbackModal } from '@/composables/useFeedbackModal.js'
 import { getTreasureProbability, treasureDisplayName } from '@/utils/treasureProbability.js'
+import { recordPredictionSnapshot } from '@/utils/predictionJournal.js'
+import { getCurrentDigOrder, getTodayUTC } from '@/utils/buildDigTimeline.js'
 
 // Use reliable assets composable
 const { getImageSrc } = useReliableAssets()
@@ -217,8 +219,8 @@ const picker = ref(null)
 // revealed treasures, so a treasure from a completed formation must still be
 // able to anchor to its shape. Including all shapes only ever makes deductions
 // more conservative (never a wrong guarantee).
-const { solverPatternKeys } = useLandData()
-const { guaranteed, guaranteedSlugs, guaranteedCandidates, probabilities, globalSolutionCount, probabilityComplete, probabilityMode, smartDig, smartDigRanking, targetPlan, targetComplete, targetRequiredCount, targetFoundCount, targetRemainingCount } = usePredictionEngine(
+const { solverPatternKeys, desert } = useLandData()
+const { guaranteed, guaranteedSlugs, guaranteedCandidates, probabilities, globalSolutionCount, probabilityComplete, probabilityMode, smartDig, smartDigRanking, targetPlan, targetComplete, targetRequiredCount, targetFoundCount, targetRemainingCount, targetLayoutCount } = usePredictionEngine(
   tiles,
   solverPatternKeys,
   toRef(() => showPrediction || showProbability),
@@ -273,9 +275,9 @@ const probabilityPrefix = computed(() =>
   probabilityMode.value === 'approximate' ? '~' : ''
 )
 
-const probabilityRanks = computed(() => {
+const probabilityCandidateList = computed(() => {
   const ranked = []
-  if (!showProbability || !probabilityTarget || targetComplete.value) return new Map()
+  if (!showProbability || !probabilityTarget || targetComplete.value) return ranked
 
   for (let index = 0; index < tiles.value.length; index++) {
     if (isRevealed(tiles.value[index])) continue
@@ -287,14 +289,59 @@ const probabilityRanks = computed(() => {
     if (probability > 0) ranked.push({ index, probability })
   }
 
-  ranked.sort((a, b) =>
-    b.probability - a.probability || a.index - b.index
-  )
-
-  return new Map(
-    ranked.slice(0, 10).map((entry, i) => [entry.index, i + 1]),
-  )
+  return ranked
+    .sort((a, b) =>
+      b.probability - a.probability || a.index - b.index
+    )
+    .slice(0, 10)
 })
+
+const probabilityRanks = computed(() =>
+  new Map(
+    probabilityCandidateList.value.map((entry, i) => [entry.index, i + 1]),
+  )
+)
+
+const currentDigOrder = computed(() =>
+  getCurrentDigOrder(desert.value?.digging?.grid || [])
+)
+
+watch(
+  [
+    probabilityCandidateList,
+    smartDig,
+    targetPlan,
+    probabilityMode,
+    targetComplete,
+    targetRequiredCount,
+    targetFoundCount,
+    targetLayoutCount,
+    currentDigOrder,
+    () => probabilityTarget,
+    () => showProbability,
+  ],
+  () => {
+    if (!showProbability || !probabilityTarget) return
+    if (probabilityMode.value === 'none') return
+
+    recordPredictionSnapshot({
+      landId,
+      utcDate: getTodayUTC(),
+      afterDigOrder: currentDigOrder.value,
+      target: probabilityTarget,
+      mode: probabilityMode.value,
+      globalSolutionCount: globalSolutionCount.value,
+      targetLayoutCount: targetLayoutCount.value,
+      targetComplete: targetComplete.value,
+      targetRequiredCount: targetRequiredCount.value,
+      targetFoundCount: targetFoundCount.value,
+      topCandidates: probabilityCandidateList.value,
+      best: smartDig.value,
+      plan: targetPlan.value,
+    })
+  },
+  { immediate: true, deep: true }
+)
 
 function probabilityRank(index) {
   return probabilityRanks.value.get(index) ?? null
