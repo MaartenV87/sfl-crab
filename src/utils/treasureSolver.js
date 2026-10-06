@@ -113,6 +113,7 @@ export function solveTreasures(
       probabilityMode: 'none',
       smartDig: null,
       smartDigRanking: [],
+      targetPlan: null,
       partial: false,
     }
   }
@@ -931,6 +932,7 @@ export function solveTreasures(
   let probabilityMode = 'none'
   let smartDig = null
   let smartDigRanking = []
+  let targetPlan = null
 
   if (includeProbabilities) {
     const probabilityCounts = new Map() // idx -> Map<slug,count>
@@ -940,6 +942,7 @@ export function solveTreasures(
     // treasure can be, instead of being distracted by e.g. Old Bottle ambiguity.
     const targetJointCounts = new Map()
     const targetSignatureCounts = new Map()
+    const targetSolutionCells = [] // exact solutions only; each entry is a small sorted idx[]
     const normalizedProbabilityTarget = slugify(probabilityTarget)
     const probabilityGroups = []
     let probabilityGroupsValid = true
@@ -1136,6 +1139,7 @@ export function solveTreasures(
         targetCells.sort((a, b) => a - b)
         const targetSignature = targetCells.join(',')
         if (normalizedProbabilityTarget) {
+          targetSolutionCells.push(targetCells)
           targetSignatureCounts.set(
             targetSignature,
             (targetSignatureCounts.get(targetSignature) ?? 0) + 1,
@@ -1327,6 +1331,146 @@ export function solveTreasures(
         }
         probabilityMode = 'exact'
 
+        // Exact 3-dig target plan. We search combinations of the strongest
+        // candidate cells and maximize P(hit selected target in <= 3 digs)
+        // across the COMPLETE set of valid boards. This is a static lookahead
+        // plan; after each real dig the solver recalculates, so the next plan
+        // automatically adapts to the observed result.
+        targetPlan = null
+        if (normalizedProbabilityTarget && targetSolutionCells.length === globalSolutionCount) {
+          const candidates = []
+          for (const [idx, byName] of probabilities) {
+            if (actuallyRevealedCells.has(idx)) continue
+            const p = byName.get(normalizedProbabilityTarget) ?? 0
+            if (p > 0) candidates.push({ idx, p })
+          }
+          candidates.sort((a, b) => b.p - a.p || a.idx - b.idx)
+
+          // 30 is enough for complementary low-ranked cells while keeping the
+          // exact C(n,3) bitset search tiny on mobile.
+          const pool = candidates.slice(0, 30)
+          const words = Math.ceil(globalSolutionCount / 32)
+          const bitsets = new Map(pool.map(({ idx }) => [idx, new Uint32Array(words)]))
+          const poolSet = new Set(pool.map(({ idx }) => idx)
+
+          for (let si = 0; si < targetSolutionCells.length; si++) {
+            const word = si >>> 5
+            const bit = (1 << (si & 31)) >>> 0
+            for (const idx of targetSolutionCells[si]) {
+              if (!poolSet.has(idx)) continue
+              bitsets.get(idx)[word] |= bit
+            }
+          }
+
+          const popcount32 = value => {
+            let v = value >>> 0
+            v = v - ((v >>> 1) & 0x55555555)
+            v = (v & 0x33333333) + ((v >>> 2) & 0x33333333)
+            return (((v + (v >>> 4)) & 0x0F0F0F0F) * 0x01010101) >>> 24
+          }
+
+          const unionCount = indexes => {
+            let count = 0
+            for (let wi = 0; wi < words; wi++) {
+              let value = 0
+              for (const idx of indexes) value |= bitsets.get(idx)[wi]
+              count += popcount32(value)
+            }
+            return count
+          }
+
+          let bestCombo = []
+          let bestCount = 0
+          const n = pool.length
+
+          for (let i = 0; i < n; i++) {
+            const combo = [pool[i].idx]
+            const count = unionCount(combo)
+            if (count > bestCount) {
+              bestCount = count
+              bestCombo = combo
+            }
+          }
+
+          if (n >= 2) {
+            bestCount = -1
+            for (let i = 0; i < n - 1; i++) {
+              for (let j = i + 1; j < n; j++) {
+                const combo = [pool[i].idx, pool[j].idx]
+                const count = unionCount(combo)
+                if (count > bestCount) {
+                  bestCount = count
+                  bestCombo = combo
+                }
+              }
+            }
+          }
+
+          if (n >= 3) {
+            bestCount = -1
+            for (let i = 0; i < n - 2; i++) {
+              for (let j = i + 1; j < n - 1; j++) {
+                for (let k = j + 1; k < n; k++) {
+                  const combo = [pool[i].idx, pool[j].idx, pool[k].idx]
+                  const count = unionCount(combo)
+                  if (count > bestCount) {
+                    bestCount = count
+                    bestCombo = combo
+                  }
+                }
+              }
+            }
+          }
+
+          if (bestCombo.length) {
+            // Order the chosen lookahead set by marginal hit gain so every
+            // displayed cumulative percentage is meaningful.
+            const remaining = [...bestCombo]
+            const ordered = []
+            let previousCount = 0
+            while (remaining.length) {
+              let bestIdx = remaining[0]
+              let bestUnion = -1
+              for (const idx of remaining) {
+                const count = unionCount([...ordered, idx])
+                if (count > bestUnion) {
+                  bestUnion = count
+                  bestIdx = idx
+                }
+              }
+              ordered.push(bestIdx)
+              remaining.splice(remaining.indexOf(bestIdx), 1)
+              previousCount = bestUnion
+            }
+
+            const steps = []
+            for (let i = 0; i < ordered.length; i++) {
+              const prefix = ordered.slice(0, i + 1)
+              const hits = unionCount(prefix)
+              const cumulativeProbability = hits / globalSolutionCount
+              const prevHits = i === 0 ? 0 : unionCount(prefix.slice(0, -1))
+              steps.push({
+                step: i + 1,
+                index: ordered[i],
+                directProbability:
+                  probabilities.get(ordered[i])?.get(normalizedProbabilityTarget) ?? 0,
+                cumulativeProbability,
+                marginalProbability: (hits - prevHits) / globalSolutionCount,
+              })
+            }
+
+            targetPlan = {
+              target: normalizedProbabilityTarget,
+              horizon: steps.length,
+              candidatePoolSize: pool.length,
+              exact: true,
+              steps,
+              cumulativeProbability:
+                steps[steps.length - 1]?.cumulativeProbability ?? 0,
+            }
+          }
+        }
+
         smartDigRanking = []
 
         if (normalizedProbabilityTarget && targetSignatureCounts.size > 1) {
@@ -1475,6 +1619,7 @@ export function solveTreasures(
     probabilityMode,
     smartDig,
     smartDigRanking,
+    targetPlan,
     partial: false,
   }
 }
