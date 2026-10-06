@@ -20,6 +20,8 @@ export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { grid
   const probabilityComplete = ref(true)
   const probabilityReason = ref(null)
   const probabilityMode = ref('none')
+  const smartDig = ref(null)
+  const smartDigRanking = ref([])
 
   const schedule = (typeof window !== 'undefined' && window.requestIdleCallback)
     ? window.requestIdleCallback.bind(window)
@@ -49,6 +51,8 @@ export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { grid
     probabilityComplete.value = result.probabilityComplete ?? true
     probabilityReason.value = result.probabilityReason ?? null
     probabilityMode.value = result.probabilityMode ?? 'none'
+    smartDig.value = result.smartDig ?? null
+    smartDigRanking.value = result.smartDigRanking ?? []
   }
 
   function recompute() {
@@ -67,6 +71,8 @@ export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { grid
       probabilityComplete.value = true
       probabilityReason.value = null
       probabilityMode.value = 'none'
+      smartDig.value = null
+      smartDigRanking.value = []
       return
     }
 
@@ -93,5 +99,5 @@ export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { grid
     { immediate: true, deep: true }
   )
 
-  return { guaranteed, guaranteedSlugs, guaranteedCandidates, guaranteedFormationCounts, remainingCounts, remainingRegions, possibleTreasureCells, probabilities, globalSolutionCount, probabilityComplete, probabilityReason, probabilityMode }
+  return { guaranteed, guaranteedSlugs, guaranteedCandidates, guaranteedFormationCounts, remainingCounts, remainingRegions, possibleTreasureCells, probabilities, globalSolutionCount, probabilityComplete, probabilityReason, probabilityMode, smartDig, smartDigRanking }
 }
