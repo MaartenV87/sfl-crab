@@ -190,7 +190,10 @@ const { guaranteed, guaranteedSlugs, guaranteedCandidates, probabilities, global
   tiles,
   solverPatternKeys,
   toRef(() => showPrediction || showProbability),
-  { probabilityRef: toRef(() => showProbability) },
+  {
+    probabilityRef: toRef(() => showProbability),
+    probabilityTargetRef: toRef(() => probabilityTarget),
+  },
 )
 
 // Feed the guaranteed set into the engine as a treasure mask so a crab adjacent
@@ -280,8 +283,16 @@ const smartDigTitle = computed(() => {
   if (!smartDig.value) return ''
   const col = String.fromCharCode(65 + (smartDig.value.index % 10))
   const row = Math.floor(smartDig.value.index / 10) + 1
-  const expected = Math.round(smartDig.value.expectedElimination * 100)
-  const worst = Math.round(smartDig.value.worstCaseElimination * 100)
+
+  if (smartDig.value.targetAware) {
+    const info = Math.round((smartDig.value.targetInfoGain ?? 0) * 100)
+    const hit = Math.round((smartDig.value.targetHitProbability ?? 0) * 100)
+    const label = probabilityTarget.replace(/_/g, ' ')
+    return `Best next dig for ${label}: ${col}${row} — removes ~${info}% of remaining target-location uncertainty; ${hit}% direct hit chance`
+  }
+
+  const expected = Math.round((smartDig.value.expectedElimination ?? 0) * 100)
+  const worst = Math.round((smartDig.value.worstCaseElimination ?? 0) * 100)
   return `Best next dig: ${col}${row} — expected to eliminate ${expected}% of valid boards (worst case ${worst}%)`
 })
 
