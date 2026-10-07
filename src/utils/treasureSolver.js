@@ -1481,6 +1481,11 @@ export function solveTreasures(
               const hits = unionCount(prefix)
               const cumulativeProbability = hits / globalSolutionCount
               const prevHits = i === 0 ? 0 : unionCount(prefix.slice(0, -1))
+              const remainingBeforeStep = globalSolutionCount - prevHits
+              const conditionalProbability = remainingBeforeStep > 0
+                ? (hits - prevHits) / remainingBeforeStep
+                : 0
+
               steps.push({
                 step: i + 1,
                 index: ordered[i],
@@ -1488,7 +1493,13 @@ export function solveTreasures(
                   probabilities.get(ordered[i])?.get(normalizedProbabilityTarget) ?? 0,
                 cumulativeProbability,
                 marginalProbability: (hits - prevHits) / globalSolutionCount,
+                conditionalProbability,
               })
+
+              // Once the selected target is guaranteed within this prefix,
+              // additional static plan cells add no value. The next real dig
+              // will trigger a fresh adaptive solve anyway.
+              if (cumulativeProbability >= 1 - 1e-12) break
             }
 
             targetPlan = {
@@ -1505,7 +1516,34 @@ export function solveTreasures(
 
         smartDigRanking = []
 
-        if (normalizedProbabilityTarget && targetSignatureCounts.size > 1) {
+        if (normalizedProbabilityTarget && targetSignatureCounts.size === 1 && !targetComplete) {
+          // The target layout is fully determined. BEST must point at the
+          // guaranteed target itself; falling back to whole-board entropy would
+          // recommend unrelated Bottle/Starfish/etc. cells.
+          const exactTargetCells = [...probabilities.entries()]
+            .filter(([idx, byName]) =>
+              !actuallyRevealedCells.has(idx) &&
+              (byName.get(normalizedProbabilityTarget) ?? 0) >= 1 - 1e-12
+            )
+            .map(([idx]) => idx)
+            .sort((a, b) => a - b)
+
+          smartDigRanking = exactTargetCells.map(idx => ({
+            index: idx,
+            targetInfoGain: 1,
+            targetHitProbability: 1,
+            worstCaseTargetGain: 1,
+            expectedTargetImpurity: 0,
+            outcomes: [{
+              outcome: `treasure:${normalizedProbabilityTarget}`,
+              probability: 1,
+              count: globalSolutionCount,
+              targetPosteriorImpurity: 0,
+            }],
+            targetAware: true,
+            targetLocked: true,
+          }))
+        } else if (normalizedProbabilityTarget && targetSignatureCounts.size > 1) {
           // Target-aware information gain. We measure uncertainty only over
           // layouts of the selected treasure. If a dig merely distinguishes
           // two Old Bottle layouts while the Otter Pebble cells stay identical,
