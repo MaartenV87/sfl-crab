@@ -107,6 +107,7 @@ export function solveTreasures(
       remainingRegions: new Map(),
       possibleTreasureCells: new Set(),
       probabilities: new Map(),
+      targetProbabilities: new Map(),
       globalSolutionCount: 0,
       probabilityComplete: true,
       probabilityReason: null,
@@ -932,6 +933,7 @@ export function solveTreasures(
   // reported only after an EXHAUSTIVE search. A capped deterministic DFS is
   // not an unbiased sample, so partial results are deliberately discarded.
   let probabilities = new Map()
+  let targetProbabilities = new Map()
   let globalSolutionCount = 0
   let probabilityComplete = true
   let probabilityReason = null
@@ -1365,6 +1367,26 @@ export function solveTreasures(
         probabilityMode = 'exact'
         targetLayoutCount = targetSignatureCounts.size
 
+        // For the selected target, also expose a target-layout-normalized
+        // probability. Every DISTINCT target layout gets equal weight, so
+        // unrelated patterns cannot inflate a cell merely because that target
+        // layout combines with many Bottle/Seaweed/etc. completions.
+        targetProbabilities = new Map()
+        if (normalizedProbabilityTarget && targetSignatureCounts.size > 0) {
+          const uniqueSignatures = [...targetSignatureCounts.keys()]
+          for (const signature of uniqueSignatures) {
+            if (!signature) continue
+            for (const token of signature.split(',')) {
+              const idx = Number(token)
+              if (!Number.isFinite(idx)) continue
+              targetProbabilities.set(
+                idx,
+                (targetProbabilities.get(idx) ?? 0) + 1 / uniqueSignatures.length,
+              )
+            }
+          }
+        }
+
         // Exact 3-dig target plan. We search combinations of the strongest
         // candidate cells and maximize P(hit selected target in <= 3 digs)
         // across the COMPLETE set of valid boards. This is a static lookahead
@@ -1677,6 +1699,13 @@ export function solveTreasures(
         // Never expose the deterministic DFS prefix as a probability. Fall
         // back to a transparent local-placement estimate instead.
         probabilities = localEstimate
+        targetProbabilities = new Map()
+        if (normalizedProbabilityTarget) {
+          for (const [idx, byName] of localEstimate) {
+            const p = byName.get(normalizedProbabilityTarget) ?? 0
+            if (p > 0) targetProbabilities.set(idx, p)
+          }
+        }
         probabilityMode = 'approximate'
         if (targetComplete && normalizedProbabilityTarget) {
           for (const byName of probabilities.values()) {
@@ -1699,6 +1728,7 @@ export function solveTreasures(
     remainingRegions,
     possibleTreasureCells,
     probabilities,
+    targetProbabilities,
     globalSolutionCount,
     probabilityComplete,
     probabilityReason,
