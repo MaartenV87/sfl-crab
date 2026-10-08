@@ -107,6 +107,7 @@ export function solveTreasures(
       remainingRegions: new Map(),
       possibleTreasureCells: new Set(),
       probabilities: new Map(),
+      targetProbabilities: new Map(),
       globalSolutionCount: 0,
       probabilityComplete: true,
       probabilityReason: null,
@@ -932,6 +933,7 @@ export function solveTreasures(
   // reported only after an EXHAUSTIVE search. A capped deterministic DFS is
   // not an unbiased sample, so partial results are deliberately discarded.
   let probabilities = new Map()
+  let targetProbabilities = new Map()
   let globalSolutionCount = 0
   let probabilityComplete = true
   let probabilityReason = null
@@ -1365,6 +1367,26 @@ export function solveTreasures(
         probabilityMode = 'exact'
         targetLayoutCount = targetSignatureCounts.size
 
+        // For the selected target, also expose a target-layout-normalized
+        // probability. Every DISTINCT target layout gets equal weight, so
+        // unrelated patterns cannot inflate a cell merely because that target
+        // layout combines with many Bottle/Seaweed/etc. completions.
+        targetProbabilities = new Map()
+        if (normalizedProbabilityTarget && targetSignatureCounts.size > 0) {
+          const uniqueSignatures = [...targetSignatureCounts.keys()]
+          for (const signature of uniqueSignatures) {
+            if (!signature) continue
+            for (const token of signature.split(',')) {
+              const idx = Number(token)
+              if (!Number.isFinite(idx)) continue
+              targetProbabilities.set(
+                idx,
+                (targetProbabilities.get(idx) ?? 0) + 1 / uniqueSignatures.length,
+              )
+            }
+          }
+        }
+
         // Exact 3-dig target plan. We search combinations of the strongest
         // candidate cells and maximize P(hit selected target in <= 3 digs)
         // across the COMPLETE set of valid boards. This is a static lookahead
@@ -1481,6 +1503,11 @@ export function solveTreasures(
               const hits = unionCount(prefix)
               const cumulativeProbability = hits / globalSolutionCount
               const prevHits = i === 0 ? 0 : unionCount(prefix.slice(0, -1))
+              const remainingBeforeStep = globalSolutionCount - prevHits
+              const conditionalProbability = remainingBeforeStep > 0
+                ? (hits - prevHits) / remainingBeforeStep
+                : 0
+
               steps.push({
                 step: i + 1,
                 index: ordered[i],
@@ -1488,7 +1515,13 @@ export function solveTreasures(
                   probabilities.get(ordered[i])?.get(normalizedProbabilityTarget) ?? 0,
                 cumulativeProbability,
                 marginalProbability: (hits - prevHits) / globalSolutionCount,
+                conditionalProbability,
               })
+
+              // Once the selected target is guaranteed within this prefix,
+              // additional static plan cells add no value. The next real dig
+              // will trigger a fresh adaptive solve anyway.
+              if (cumulativeProbability >= 1 - 1e-12) break
             }
 
             targetPlan = {
@@ -1505,7 +1538,34 @@ export function solveTreasures(
 
         smartDigRanking = []
 
-        if (normalizedProbabilityTarget && targetSignatureCounts.size > 1) {
+        if (normalizedProbabilityTarget && targetSignatureCounts.size === 1 && !targetComplete) {
+          // The target layout is fully determined. BEST must point at the
+          // guaranteed target itself; falling back to whole-board entropy would
+          // recommend unrelated Bottle/Starfish/etc. cells.
+          const exactTargetCells = [...probabilities.entries()]
+            .filter(([idx, byName]) =>
+              !actuallyRevealedCells.has(idx) &&
+              (byName.get(normalizedProbabilityTarget) ?? 0) >= 1 - 1e-12
+            )
+            .map(([idx]) => idx)
+            .sort((a, b) => a - b)
+
+          smartDigRanking = exactTargetCells.map(idx => ({
+            index: idx,
+            targetInfoGain: 1,
+            targetHitProbability: 1,
+            worstCaseTargetGain: 1,
+            expectedTargetImpurity: 0,
+            outcomes: [{
+              outcome: `treasure:${normalizedProbabilityTarget}`,
+              probability: 1,
+              count: globalSolutionCount,
+              targetPosteriorImpurity: 0,
+            }],
+            targetAware: true,
+            targetLocked: true,
+          }))
+        } else if (normalizedProbabilityTarget && targetSignatureCounts.size > 1) {
           // Target-aware information gain. We measure uncertainty only over
           // layouts of the selected treasure. If a dig merely distinguishes
           // two Old Bottle layouts while the Otter Pebble cells stay identical,
@@ -1639,6 +1699,13 @@ export function solveTreasures(
         // Never expose the deterministic DFS prefix as a probability. Fall
         // back to a transparent local-placement estimate instead.
         probabilities = localEstimate
+        targetProbabilities = new Map()
+        if (normalizedProbabilityTarget) {
+          for (const [idx, byName] of localEstimate) {
+            const p = byName.get(normalizedProbabilityTarget) ?? 0
+            if (p > 0) targetProbabilities.set(idx, p)
+          }
+        }
         probabilityMode = 'approximate'
         if (targetComplete && normalizedProbabilityTarget) {
           for (const byName of probabilities.values()) {
@@ -1661,6 +1728,7 @@ export function solveTreasures(
     remainingRegions,
     possibleTreasureCells,
     probabilities,
+    targetProbabilities,
     globalSolutionCount,
     probabilityComplete,
     probabilityReason,
