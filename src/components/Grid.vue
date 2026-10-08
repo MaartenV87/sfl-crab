@@ -220,7 +220,7 @@ const picker = ref(null)
 // able to anchor to its shape. Including all shapes only ever makes deductions
 // more conservative (never a wrong guarantee).
 const { solverPatternKeys, desert } = useLandData()
-const { guaranteed, guaranteedSlugs, guaranteedCandidates, probabilities, globalSolutionCount, probabilityComplete, probabilityMode, smartDig, smartDigRanking, targetPlan, targetComplete, targetRequiredCount, targetFoundCount, targetRemainingCount, targetLayoutCount } = usePredictionEngine(
+const { guaranteed, guaranteedSlugs, guaranteedCandidates, probabilities, targetProbabilities, globalSolutionCount, probabilityComplete, probabilityMode, smartDig, smartDigRanking, targetPlan, targetComplete, targetRequiredCount, targetFoundCount, targetRemainingCount, targetLayoutCount } = usePredictionEngine(
   tiles,
   solverPatternKeys,
   toRef(() => showPrediction || showProbability),
@@ -281,11 +281,12 @@ const probabilityCandidateList = computed(() => {
 
   for (let index = 0; index < tiles.value.length; index++) {
     if (isRevealed(tiles.value[index])) continue
-    const probability = getTreasureProbability(
-      probabilities.value,
-      index,
-      probabilityTarget,
-    )
+    const probability = targetProbabilities.value.get(index)
+      ?? getTreasureProbability(
+        probabilities.value,
+        index,
+        probabilityTarget,
+      )
     if (probability > 0) ranked.push({ index, probability })
   }
 
@@ -398,6 +399,12 @@ const pickerProbabilityItems = computed(() => {
   if (!byName) return []
 
   return [...byName.entries()]
+    .map(([slug, p]) => {
+      const adjusted = slug === probabilityTarget
+        ? (targetProbabilities.value.get(picker.value.tileIndex) ?? p)
+        : p
+      return [slug, adjusted]
+    })
     .filter(([, p]) => p > 0)
     .map(([slug, p]) => ({
       slug,
