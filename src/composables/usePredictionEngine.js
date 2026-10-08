@@ -16,6 +16,7 @@ export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { grid
   const remainingRegions = ref(new Map())
   const possibleTreasureCells = ref(new Set())
   const probabilities = ref(new Map())
+  const targetProbabilities = ref(new Map())
   const globalSolutionCount = ref(0)
   const probabilityComplete = ref(true)
   const probabilityReason = ref(null)
@@ -53,6 +54,7 @@ export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { grid
     remainingRegions.value = result.remainingRegions
     possibleTreasureCells.value = result.possibleTreasureCells
     probabilities.value = result.probabilities ?? new Map()
+    targetProbabilities.value = result.targetProbabilities ?? new Map()
     globalSolutionCount.value = result.globalSolutionCount ?? 0
     probabilityComplete.value = result.probabilityComplete ?? true
     probabilityReason.value = result.probabilityReason ?? null
@@ -79,6 +81,7 @@ export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { grid
       remainingRegions.value = new Map()
       possibleTreasureCells.value = new Set()
       probabilities.value = new Map()
+      targetProbabilities.value = new Map()
       globalSolutionCount.value = 0
       probabilityComplete.value = true
       probabilityReason.value = null
@@ -118,5 +121,5 @@ export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { grid
     { immediate: true, deep: true }
   )
 
-  return { guaranteed, guaranteedSlugs, guaranteedCandidates, guaranteedFormationCounts, remainingCounts, remainingRegions, possibleTreasureCells, probabilities, globalSolutionCount, probabilityComplete, probabilityReason, probabilityMode, smartDig, smartDigRanking, targetPlan, targetComplete, targetRequiredCount, targetFoundCount, targetRemainingCount, targetLayoutCount }
+  return { guaranteed, guaranteedSlugs, guaranteedCandidates, guaranteedFormationCounts, remainingCounts, remainingRegions, possibleTreasureCells, probabilities, targetProbabilities, globalSolutionCount, probabilityComplete, probabilityReason, probabilityMode, smartDig, smartDigRanking, targetPlan, targetComplete, targetRequiredCount, targetFoundCount, targetRemainingCount, targetLayoutCount }
 }
