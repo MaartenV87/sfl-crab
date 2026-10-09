@@ -367,7 +367,11 @@ const smartDigTitle = computed(() => {
   if (smartDig.value.targetAware) {
     const info = Math.round((smartDig.value.targetInfoGain ?? 0) * 100)
     const hit = Math.round((smartDig.value.targetHitProbability ?? 0) * 100)
+    const companion = Math.round((smartDig.value.companionProbability ?? 0) * 100)
     const label = probabilityTarget.replace(/_/g, ' ')
+    if (smartDig.value.openingMode) {
+      return `Opening BEST for ${label}: ${col}${row} — ${info}% information split; ${hit}% direct hit; ${companion}% companion-object chance`
+    }
     return `Best next dig for ${label}: ${col}${row} — removes ~${info}% of remaining target-location uncertainty; ${hit}% direct hit chance`
   }
 
@@ -378,7 +382,8 @@ const smartDigTitle = computed(() => {
 
 function probabilityPercent(index) {
   if (!showProbability || !probabilityTarget || targetComplete.value || isRevealed(tiles.value[index])) return null
-  const p = getTreasureProbability(probabilities.value, index, probabilityTarget)
+  const p = targetProbabilities.value.get(index)
+    ?? getTreasureProbability(probabilities.value, index, probabilityTarget)
   if (p <= 0) return null
   return Math.round(p * 100)
 }
