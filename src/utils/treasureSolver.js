@@ -1096,6 +1096,230 @@ export function solveTreasures(
       }
 
       const localEstimate = buildLocalEstimate()
+
+      // Reduced target-only model for the early/approximate phase.
+      //
+      // The full-board enumeration often exceeds its budget during the first
+      // digs. Falling back to a per-cell local percentage then produces a very
+      // flat 4-10% map and effectively chooses the first cell in scan order.
+      // Instead, enumerate ONLY the formations that contain the selected
+      // target. Their companion objects (e.g. Camel Bone around Otter Pebble)
+      // are kept because finding one is highly informative about target
+      // location. Unrelated formations are deliberately excluded so they
+      // cannot dominate the opening recommendation.
+      const buildTargetOpeningModel = () => {
+        if (!normalizedProbabilityTarget || targetComplete) return null
+
+        const targetKeys = new Set(
+          presentKeys.filter(key =>
+            DIGGING_FORMATIONS[key]?.some(
+              plot => slugify(plot.name) === normalizedProbabilityTarget,
+            ),
+          ),
+        )
+        if (!targetKeys.size) return null
+
+        const targetGroups = probabilityGroups
+          .filter(group => targetKeys.has(group.key))
+          .map(group => ({
+            key: group.key,
+            need: group.need,
+            placements: group.placements,
+          }))
+
+        const fixedTargetPlacements = confirmedPlacements.filter(plots =>
+          [...plots.values()].some(
+            name => slugify(name) === normalizedProbabilityTarget,
+          ),
+        )
+
+        // A revealed companion (Camel Bone for artefact patterns) must be
+        // explained by the target model only when no non-target daily pattern
+        // can own that same object name.
+        const targetNames = new Set()
+        const nonTargetNames = new Set()
+        for (const key of presentKeys) {
+          const destination = targetKeys.has(key) ? targetNames : nonTargetNames
+          for (const plot of DIGGING_FORMATIONS[key] || []) {
+            destination.add(normName(plot.name))
+          }
+        }
+        const targetRelevantReveals = [...revealedTreasureName].filter(
+          ([, name]) => {
+            const normalized = normName(name)
+            return targetNames.has(normalized) && !nonTargetNames.has(normalized)
+          },
+        )
+
+        const occupiedOpening = new Set(fixedProbabilityCells)
+        const chosenOpening = []
+        const outcomeCountsOpening = new Map() // idx -> Map<slug,count>
+        let configurationCount = 0
+        let openingNodes = 0
+        let openingAborted = false
+        const OPENING_CONFIGURATION_CAP = 750000
+        const OPENING_NODE_CAP = 2000000
+
+        const recordOpeningConfiguration = () => {
+          const cellsInConfiguration = new Map()
+          for (const plots of [...fixedTargetPlacements, ...chosenOpening]) {
+            for (const [idx, name] of plots) cellsInConfiguration.set(idx, name)
+          }
+
+          // Enforce all reveals that are exclusively owned by target-bearing
+          // patterns. This is important once Camel Bones / the target itself
+          // start appearing during the session.
+          for (const [idx, name] of targetRelevantReveals) {
+            if (!namesMatch(cellsInConfiguration.get(idx), name)) return
+          }
+
+          configurationCount += 1
+          if (configurationCount > OPENING_CONFIGURATION_CAP) {
+            openingAborted = true
+            return
+          }
+
+          // "Other" is implicit. We only need to count observable treasure
+          // outcomes from target-bearing formations; p(other) = 1 - sum(p).
+          for (const [idx, name] of cellsInConfiguration) {
+            if (actuallyRevealedCells.has(idx)) continue
+            const slug = slugify(name)
+            let byOutcome = outcomeCountsOpening.get(idx)
+            if (!byOutcome) {
+              byOutcome = new Map()
+              outcomeCountsOpening.set(idx, byOutcome)
+            }
+            byOutcome.set(slug, (byOutcome.get(slug) ?? 0) + 1)
+          }
+        }
+
+        const chooseOpeningGroup = (groupIndex, startPlacement, left) => {
+          if (openingAborted) return
+          openingNodes += 1
+          if (openingNodes > OPENING_NODE_CAP) {
+            openingAborted = true
+            return
+          }
+
+          if (groupIndex >= targetGroups.length) {
+            recordOpeningConfiguration()
+            return
+          }
+
+          const group = targetGroups[groupIndex]
+          if (left === 0) {
+            chooseOpeningGroup(
+              groupIndex + 1,
+              0,
+              targetGroups[groupIndex + 1]?.need ?? 0,
+            )
+            return
+          }
+
+          for (let pi = startPlacement; pi < group.placements.length; pi++) {
+            if (openingAborted) return
+            const plots = group.placements[pi]
+            const keys = [...plots.keys()]
+            if (keys.some(idx => occupiedOpening.has(idx))) continue
+
+            for (const idx of keys) occupiedOpening.add(idx)
+            chosenOpening.push(plots)
+            chooseOpeningGroup(groupIndex, pi + 1, left - 1)
+            chosenOpening.pop()
+            for (const idx of keys) occupiedOpening.delete(idx)
+          }
+        }
+
+        if (targetGroups.length) {
+          chooseOpeningGroup(0, 0, targetGroups[0].need)
+        } else {
+          // All target-bearing formations are already fixed. This still lets
+          // the reduced model point directly at an undug guaranteed target.
+          recordOpeningConfiguration()
+        }
+
+        if (openingAborted || configurationCount === 0) return null
+
+        const openingTargetProbabilities = new Map()
+        const ranking = []
+
+        for (const [idx, counts] of outcomeCountsOpening) {
+          if (actuallyRevealedCells.has(idx)) continue
+
+          let sumKnown = 0
+          let sumSquares = 0
+          let targetHitProbability = 0
+          let companionProbability = 0
+          const outcomes = []
+
+          for (const [slug, count] of counts) {
+            const p = count / configurationCount
+            sumKnown += p
+            sumSquares += p * p
+            if (slug === normalizedProbabilityTarget) {
+              targetHitProbability = p
+              openingTargetProbabilities.set(idx, p)
+            } else {
+              companionProbability += p
+            }
+            outcomes.push({
+              outcome: `treasure:${slug}`,
+              probability: p,
+              count,
+            })
+          }
+
+          const otherProbability = Math.max(0, 1 - sumKnown)
+          sumSquares += otherProbability * otherProbability
+          if (otherProbability > 0) {
+            outcomes.push({
+              outcome: 'other',
+              probability: otherProbability,
+              count: otherProbability * configurationCount,
+            })
+          }
+
+          outcomes.sort((a, b) =>
+            b.probability - a.probability || a.outcome.localeCompare(b.outcome)
+          )
+
+          const targetInfoGain = 1 - sumSquares
+          ranking.push({
+            index: idx,
+            targetAware: true,
+            openingMode: true,
+            probabilityBasis: 'target-pattern-configurations',
+            openingConfigurationCount: configurationCount,
+            targetInfoGain,
+            targetHitProbability,
+            companionProbability,
+            outcomes,
+          })
+        }
+
+        ranking.sort((a, b) => {
+          // A guaranteed direct target must always win. Otherwise early-game
+          // target hit rates are nearly flat, so information gain is the main
+          // discriminator and direct hit chance breaks close ties.
+          const aGuaranteed = a.targetHitProbability >= 1 - 1e-12
+          const bGuaranteed = b.targetHitProbability >= 1 - 1e-12
+          if (aGuaranteed !== bGuaranteed) return aGuaranteed ? -1 : 1
+          return (
+            b.targetInfoGain - a.targetInfoGain ||
+            b.targetHitProbability - a.targetHitProbability ||
+            b.companionProbability - a.companionProbability ||
+            a.index - b.index
+          )
+        })
+
+        return {
+          configurationCount,
+          targetProbabilities: openingTargetProbabilities,
+          ranking,
+          best: ranking[0] ?? null,
+        }
+      }
+
       const occupied = new Set()
       const chosen = []
       let probabilityNodes = 0
@@ -1707,21 +1931,34 @@ export function solveTreasures(
           targetPlan = null
         }
       } else if (probabilityReason === 'too-complex') {
-        // Never expose the deterministic DFS prefix as a probability. Fall
-        // back to a transparent local-placement estimate instead.
+        // Never expose the deterministic global DFS prefix as a probability.
+        // Use the cheap local map for all objects, but replace the SELECTED
+        // target with an exact reduced target-pattern model whenever that
+        // smaller search completes. This gives a much stronger opening move.
         probabilities = localEstimate
+        const openingModel = buildTargetOpeningModel()
         targetProbabilities = new Map()
-        if (normalizedProbabilityTarget) {
+
+        if (openingModel) {
+          targetProbabilities = openingModel.targetProbabilities
+          smartDigRanking = openingModel.ranking
+          smartDig = openingModel.best
+        } else if (normalizedProbabilityTarget) {
           for (const [idx, byName] of localEstimate) {
             const p = byName.get(normalizedProbabilityTarget) ?? 0
             if (p > 0) targetProbabilities.set(idx, p)
           }
         }
+
         probabilityMode = 'approximate'
         if (targetComplete && normalizedProbabilityTarget) {
           for (const byName of probabilities.values()) {
             byName.delete(normalizedProbabilityTarget)
           }
+          targetProbabilities = new Map()
+          smartDig = null
+          smartDigRanking = []
+          targetPlan = null
         }
       } else {
         probabilities = new Map()
