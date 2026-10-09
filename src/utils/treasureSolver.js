@@ -1387,32 +1387,35 @@ export function solveTreasures(
           }
         }
 
-        // Exact 3-dig target plan. We search combinations of the strongest
-        // candidate cells and maximize P(hit selected target in <= 3 digs)
-        // across the COMPLETE set of valid boards. This is a static lookahead
-        // plan; after each real dig the solver recalculates, so the next plan
-        // automatically adapts to the observed result.
+        // Exact 3-dig target plan over DISTINCT target layouts.
+        // This must use the same distribution as the selected-target percentages
+        // shown in the UI. Otherwise unrelated formation multiplicity can make
+        // the plan disagree with Top 10 (e.g. Top 10 says 24% while P1 says 32%).
         targetPlan = null
-        if (normalizedProbabilityTarget && targetSolutionCells.length === globalSolutionCount) {
-          const candidates = []
-          for (const [idx, byName] of probabilities) {
-            if (actuallyRevealedCells.has(idx)) continue
-            const p = byName.get(normalizedProbabilityTarget) ?? 0
-            if (p > 0) candidates.push({ idx, p })
-          }
-          candidates.sort((a, b) => b.p - a.p || a.idx - b.idx)
+        if (normalizedProbabilityTarget && targetSignatureCounts.size > 0) {
+          const uniqueLayouts = [...targetSignatureCounts.keys()].map(signature =>
+            signature
+              ? signature.split(',').map(Number).filter(Number.isFinite)
+              : []
+          )
+          const candidates = [...targetProbabilities.entries()]
+            .filter(([idx, p]) => !actuallyRevealedCells.has(idx) && p > 0)
+            .map(([idx, p]) => ({ idx, p }))
+            .sort((a, b) => b.p - a.p || a.idx - b.idx)
 
-          // 30 is enough for complementary low-ranked cells while keeping the
-          // exact C(n,3) bitset search tiny on mobile.
+          // Keep a wider complementary pool, but evaluate every combination
+          // against the same equal-weight unique-target-layout distribution.
           const pool = candidates.slice(0, 30)
-          const words = Math.ceil(globalSolutionCount / 32)
-          const bitsets = new Map(pool.map(({ idx }) => [idx, new Uint32Array(words)]))
+          const words = Math.ceil(uniqueLayouts.length / 32)
+          const bitsets = new Map(
+            pool.map(({ idx }) => [idx, new Uint32Array(words)])
+          )
           const poolSet = new Set(pool.map(({ idx }) => idx))
 
-          for (let si = 0; si < targetSolutionCells.length; si++) {
-            const word = si >>> 5
-            const bit = (1 << (si & 31)) >>> 0
-            for (const idx of targetSolutionCells[si]) {
+          for (let li = 0; li < uniqueLayouts.length; li++) {
+            const word = li >>> 5
+            const bit = (1 << (li & 31)) >>> 0
+            for (const idx of uniqueLayouts[li]) {
               if (!poolSet.has(idx)) continue
               bitsets.get(idx)[word] |= bit
             }
@@ -1479,8 +1482,6 @@ export function solveTreasures(
           }
 
           if (bestCombo.length) {
-            // Order the chosen lookahead set by marginal hit gain so every
-            // displayed cumulative percentage is meaningful.
             const remaining = [...bestCombo]
             const ordered = []
             while (remaining.length) {
@@ -1497,13 +1498,14 @@ export function solveTreasures(
               remaining.splice(remaining.indexOf(bestIdx), 1)
             }
 
+            const denominator = uniqueLayouts.length
             const steps = []
             for (let i = 0; i < ordered.length; i++) {
               const prefix = ordered.slice(0, i + 1)
               const hits = unionCount(prefix)
-              const cumulativeProbability = hits / globalSolutionCount
+              const cumulativeProbability = hits / denominator
               const prevHits = i === 0 ? 0 : unionCount(prefix.slice(0, -1))
-              const remainingBeforeStep = globalSolutionCount - prevHits
+              const remainingBeforeStep = denominator - prevHits
               const conditionalProbability = remainingBeforeStep > 0
                 ? (hits - prevHits) / remainingBeforeStep
                 : 0
@@ -1511,16 +1513,12 @@ export function solveTreasures(
               steps.push({
                 step: i + 1,
                 index: ordered[i],
-                directProbability:
-                  probabilities.get(ordered[i])?.get(normalizedProbabilityTarget) ?? 0,
+                directProbability: targetProbabilities.get(ordered[i]) ?? 0,
                 cumulativeProbability,
-                marginalProbability: (hits - prevHits) / globalSolutionCount,
+                marginalProbability: (hits - prevHits) / denominator,
                 conditionalProbability,
               })
 
-              // Once the selected target is guaranteed within this prefix,
-              // additional static plan cells add no value. The next real dig
-              // will trigger a fresh adaptive solve anyway.
               if (cumulativeProbability >= 1 - 1e-12) break
             }
 
@@ -1529,6 +1527,7 @@ export function solveTreasures(
               horizon: steps.length,
               candidatePoolSize: pool.length,
               exact: true,
+              basis: 'unique-target-layouts',
               steps,
               cumulativeProbability:
                 steps[steps.length - 1]?.cumulativeProbability ?? 0,
@@ -1542,10 +1541,10 @@ export function solveTreasures(
           // The target layout is fully determined. BEST must point at the
           // guaranteed target itself; falling back to whole-board entropy would
           // recommend unrelated Bottle/Starfish/etc. cells.
-          const exactTargetCells = [...probabilities.entries()]
-            .filter(([idx, byName]) =>
+          const exactTargetCells = [...targetProbabilities.entries()]
+            .filter(([idx, p]) =>
               !actuallyRevealedCells.has(idx) &&
-              (byName.get(normalizedProbabilityTarget) ?? 0) >= 1 - 1e-12
+              p >= 1 - 1e-12
             )
             .map(([idx]) => idx)
             .sort((a, b) => a - b)
@@ -1566,17 +1565,15 @@ export function solveTreasures(
             targetLocked: true,
           }))
         } else if (normalizedProbabilityTarget && targetSignatureCounts.size > 1) {
-          // Target-aware information gain. We measure uncertainty only over
-          // layouts of the selected treasure. If a dig merely distinguishes
-          // two Old Bottle layouts while the Otter Pebble cells stay identical,
-          // its targetInfoGain is exactly zero.
-          const total = globalSolutionCount
-          let baselineCollision = 0
-          for (const count of targetSignatureCounts.values()) {
-            const p = count / total
-            baselineCollision += p * p
-          }
-          const baselineImpurity = 1 - baselineCollision
+          // Target-aware information gain with an EQUAL prior over distinct
+          // target layouts. The previous implementation weighted a target
+          // layout once per compatible full-board completion, so uncertainty
+          // in Bottle/Cockle/etc. could distort both BEST and its reported hit
+          // chance. Here each target layout has prior 1/L; full-board solutions
+          // are used only to estimate P(observed outcome | target layout).
+          const signatures = [...targetSignatureCounts.keys()]
+          const layoutCount = signatures.length
+          const baselineImpurity = 1 - (1 / layoutCount)
 
           for (const [idx, byOutcome] of targetJointCounts) {
             if (actuallyRevealedCells.has(idx)) continue
@@ -1587,15 +1584,28 @@ export function solveTreasures(
             const outcomes = []
 
             for (const [outcome, bySignature] of byOutcome) {
-              let outcomeCount = 0
-              for (const count of bySignature.values()) outcomeCount += count
-              const pOutcome = outcomeCount / total
+              const likelihoods = []
+              let likelihoodSum = 0
 
-              let posteriorCollision = 0
-              for (const count of bySignature.values()) {
-                const p = count / outcomeCount
-                posteriorCollision += p * p
+              for (const signature of signatures) {
+                const layoutSolutions = targetSignatureCounts.get(signature) ?? 0
+                if (layoutSolutions <= 0) continue
+                const matchingSolutions = bySignature.get(signature) ?? 0
+                const likelihood = matchingSolutions / layoutSolutions
+                if (likelihood <= 0) continue
+                likelihoods.push([signature, likelihood])
+                likelihoodSum += likelihood
               }
+
+              if (likelihoodSum <= 0) continue
+
+              const pOutcome = likelihoodSum / layoutCount
+              let posteriorCollision = 0
+              for (const [, likelihood] of likelihoods) {
+                const posterior = likelihood / likelihoodSum
+                posteriorCollision += posterior * posterior
+              }
+
               const posteriorImpurity = 1 - posteriorCollision
               expectedPosteriorImpurity += pOutcome * posteriorImpurity
               worstPosteriorImpurity = Math.max(
@@ -1610,7 +1620,7 @@ export function solveTreasures(
               outcomes.push({
                 outcome,
                 probability: pOutcome,
-                count: outcomeCount,
+                count: pOutcome * globalSolutionCount,
                 targetPosteriorImpurity: posteriorImpurity,
               })
             }
@@ -1638,6 +1648,7 @@ export function solveTreasures(
               expectedTargetImpurity: expectedPosteriorImpurity,
               outcomes,
               targetAware: true,
+              probabilityBasis: 'unique-target-layouts',
             })
           }
 
