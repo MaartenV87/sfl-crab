@@ -158,4 +158,47 @@ describe('treasure probability enumeration', () => {
     )
   })
 
+
+  it('uses a target-only information model for opening moves when global search is capped', () => {
+    const result = solveTreasures(
+      emptyTiles(3),
+      ['HIEROGLYPH'],
+      3,
+      {
+        includeProbabilities: true,
+        probabilityTarget: 'hieroglyph',
+        probabilitySolutionCap: 1,
+        probabilityNodeCap: 10000,
+      },
+    )
+
+    expect(result.probabilityMode).toBe('approximate')
+    expect(result.smartDig).not.toBeNull()
+    expect(result.smartDig.openingMode).toBe(true)
+    expect(result.smartDig.targetAware).toBe(true)
+    expect(result.smartDig.targetInfoGain).toBeGreaterThan(0)
+    expect(result.smartDig.targetHitProbability).toBeGreaterThan(0)
+    expect(result.targetProbabilities.size).toBeGreaterThan(0)
+  })
+
+  it('keeps approximate opening target percentages aligned with the opening model', () => {
+    const result = solveTreasures(
+      emptyTiles(3),
+      ['HIEROGLYPH'],
+      3,
+      {
+        includeProbabilities: true,
+        probabilityTarget: 'hieroglyph',
+        probabilitySolutionCap: 1,
+        probabilityNodeCap: 10000,
+      },
+    )
+
+    const best = result.smartDig
+    expect(best?.openingMode).toBe(true)
+    expect(result.targetProbabilities.get(best.index)).toBeCloseTo(
+      best.targetHitProbability,
+    )
+  })
+
 })
