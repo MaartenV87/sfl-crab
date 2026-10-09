@@ -233,7 +233,9 @@ export function buildDigTextLog({
         }
 
         const info = snap.best.targetAware
-          ? `TARGET_INFO_GAIN=${Math.round((Number(snap.best.targetInfoGain) || 0) * 100)}% | TARGET_HIT_P=${Math.round((Number(snap.best.targetHitProbability) || 0) * 100)}%`
+          ? snap.best.openingMode
+            ? `OPENING=YES | TARGET_INFO_SPLIT=${Math.round((Number(snap.best.targetInfoGain) || 0) * 100)}% | TARGET_HIT_P=${Math.round((Number(snap.best.targetHitProbability) || 0) * 100)}% | COMPANION_P=${Math.round((Number(snap.best.companionProbability) || 0) * 100)}% | TARGET_CONFIGS=${Number(snap.best.openingConfigurationCount) || 0}`
+            : `TARGET_INFO_GAIN=${Math.round((Number(snap.best.targetInfoGain) || 0) * 100)}% | TARGET_HIT_P=${Math.round((Number(snap.best.targetHitProbability) || 0) * 100)}%`
           : `EXPECTED_ELIMINATION=${Math.round((Number(snap.best.expectedElimination) || 0) * 100)}%`
 
         lines.push(
