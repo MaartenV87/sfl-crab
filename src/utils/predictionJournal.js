@@ -1,7 +1,7 @@
 import { getTodayUTC } from '@/utils/buildDigTimeline.js'
 
 export const PREDICTION_JOURNAL_VERSION = 1
-export const PREDICTION_ALGORITHM_VERSION = 'target-aware-plan3-v1'
+export const PREDICTION_ALGORITHM_VERSION = 'target-aware-opening-v2'
 
 function storageKey(landId, utcDate) {
   return `predictionJournal_${String(landId || '0')}_${utcDate || getTodayUTC()}`
@@ -46,6 +46,10 @@ function normalizeBest(best) {
     worstCaseTargetGain: Number(best.worstCaseTargetGain) || 0,
     expectedElimination: Number(best.expectedElimination) || 0,
     worstCaseElimination: Number(best.worstCaseElimination) || 0,
+    openingMode: Boolean(best.openingMode),
+    companionProbability: Number(best.companionProbability) || 0,
+    openingConfigurationCount: Number(best.openingConfigurationCount) || 0,
+    probabilityBasis: String(best.probabilityBasis || ''),
   }
 }
 
