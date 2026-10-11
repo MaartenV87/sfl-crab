@@ -64,20 +64,14 @@
           :class="probabilityBadgeClass(index)"
           :title="probabilityTitle(index)"
         >
-          <template v-if="probabilityRank(index)">#{{ probabilityRank(index) }} · </template>{{ probabilityPrefix }}{{ probabilityPercent(index) }}%
+          {{ probabilityPrefix }}{{ probabilityPercent(index) }}%
         </span>
-
-        <span
-          v-if="showProbability && targetPlanStep(index)"
-          class="plan-step-badge"
-          :title="targetPlanStepTitle(index)"
-        >P{{ targetPlanStep(index).step }}</span>
 
         <span
           v-if="showProbability && smartDig?.index === index"
           class="smart-dig-badge"
           :title="smartDigTitle"
-        >BEST</span>
+        >NEXT</span>
 
         <!-- transient shovel dig reveal overlay for freshly-dug tiles.
              Kept outside the tile-img/prediction v-if chain so it doesn't
@@ -125,7 +119,8 @@
       v-if="showProbability && targetPlan?.steps?.length"
       class="target-plan-summary"
     >
-      <div class="font-semibold">Target plan</div>
+      <div class="font-semibold">Alternative 3-dig plan</div>
+      <div class="text-[0.65rem] opacity-70 mb-1">Use NEXT as your next move. This plan is only a fixed fallback scenario.</div>
       <div class="flex flex-wrap gap-x-3 gap-y-1 justify-center">
         <span
           v-for="step in targetPlan.steps"
@@ -367,12 +362,13 @@ const smartDigTitle = computed(() => {
   if (smartDig.value.targetAware) {
     const info = Math.round((smartDig.value.targetInfoGain ?? 0) * 100)
     const hit = Math.round((smartDig.value.targetHitProbability ?? 0) * 100)
+    const withinTwo = Math.round((smartDig.value.twoStepHitProbability ?? hit / 100) * 100)
     const companion = Math.round((smartDig.value.companionProbability ?? 0) * 100)
     const label = probabilityTarget.replace(/_/g, ' ')
     if (smartDig.value.openingMode) {
-      return `Opening BEST for ${label}: ${col}${row} — ${info}% information split; ${hit}% direct hit; ${companion}% companion-object chance`
+      return `NEXT for ${label}: ${col}${row} — ${hit}% direct hit, ~${withinTwo}% chance within 2 adaptive digs; ${companion}% companion chance; ${info}% information split`
     }
-    return `Best next dig for ${label}: ${col}${row} — removes ~${info}% of remaining target-location uncertainty; ${hit}% direct hit chance`
+    return `NEXT for ${label}: ${col}${row} — ${hit}% direct hit, ~${withinTwo}% chance within 2 adaptive digs; ${info}% target information gain`
   }
 
   const expected = Math.round((smartDig.value.expectedElimination ?? 0) * 100)
@@ -509,10 +505,6 @@ function tileClasses(tile, index) {
   const rank = probabilityRank(index)
   if (rank && !isRevealed(tile)) {
     classes.push('probability-top')
-  }
-
-  if (showProbability && targetPlanStep(index) && !isRevealed(tile)) {
-    classes.push('target-plan-cell')
   }
 
   if (showProbability && smartDig.value?.index === index && !isRevealed(tile)) {
