@@ -109,6 +109,22 @@
     </div>
 
     <div
+      v-if="showProbability && probabilityTarget && smartDig && !targetComplete"
+      class="next-dig-summary"
+    >
+      <div class="font-semibold">Recommended next dig: {{ cellLabel(smartDig.index) }}</div>
+      <div class="text-[0.68rem] opacity-80">
+        {{ Math.round((smartDig.targetHitProbability ?? 0) * 100) }}% direct target chance
+        <template v-if="smartDig.adaptiveNext">
+          · ~{{ Math.round((smartDig.twoStepHitProbability ?? 0) * 100) }}% chance within 2 adaptive digs
+        </template>
+      </div>
+      <div class="text-[0.62rem] opacity-65 mt-0.5">
+        Follow NEXT first. Percentages show direct chance; the 3-dig plan below is only a fallback scenario.
+      </div>
+    </div>
+
+    <div
       v-if="showProbability && probabilityTarget && targetComplete"
       class="target-complete-summary"
     >
@@ -604,6 +620,16 @@ function getTileLabelMark (tile) {
   background: #7c3aed;
   color: white;
   pointer-events: none;
+}
+
+.next-dig-summary {
+  margin-top: 0.5rem;
+  padding: 0.5rem 0.65rem;
+  border: 2px solid rgba(124, 58, 237, 0.55);
+  border-radius: 0.6rem;
+  background: rgba(124, 58, 237, 0.10);
+  text-align: center;
+  font-size: 0.74rem;
 }
 
 .target-complete-summary {
