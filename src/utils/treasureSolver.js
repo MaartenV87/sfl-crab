@@ -1852,6 +1852,8 @@ export function solveTreasures(
             }],
             targetAware: true,
             targetLocked: true,
+            adaptiveNext: true,
+            twoStepHitProbability: 1,
           }))
         } else if (normalizedProbabilityTarget && targetSignatureCounts.size > 1) {
           // Target-aware information gain with an EQUAL prior over distinct
@@ -1941,9 +1943,71 @@ export function solveTreasures(
             })
           }
 
+          // Convert target-aware information ranking into an adaptive
+          // two-dig policy. For each possible first-dig outcome, compute the
+          // best second target cell under the posterior over UNIQUE target
+          // layouts. This directly optimizes P(find target within <=2 digs),
+          // which is closer to the user's real goal than pure entropy reduction.
+          for (const candidate of smartDigRanking) {
+            let twoStepHitProbability = 0
+            const firstIdx = candidate.index
+            const byOutcome = targetJointCounts.get(firstIdx) ?? new Map()
+
+            for (const [outcome, bySignature] of byOutcome) {
+              const likelihoods = []
+              let likelihoodSum = 0
+
+              for (const signature of signatures) {
+                const layoutSolutions = targetSignatureCounts.get(signature) ?? 0
+                if (layoutSolutions <= 0) continue
+                const matchingSolutions = bySignature.get(signature) ?? 0
+                const likelihood = matchingSolutions / layoutSolutions
+                if (likelihood <= 0) continue
+                likelihoods.push([signature, likelihood])
+                likelihoodSum += likelihood
+              }
+
+              if (likelihoodSum <= 0) continue
+              const pOutcome = likelihoodSum / layoutCount
+
+              if (outcome === `treasure:${normalizedProbabilityTarget}`) {
+                twoStepHitProbability += pOutcome
+                continue
+              }
+
+              const secondHitByCell = new Map()
+              for (const [signature, likelihood] of likelihoods) {
+                const posterior = likelihood / likelihoodSum
+                if (!signature) continue
+                for (const token of signature.split(',')) {
+                  const idx = Number(token)
+                  if (
+                    !Number.isFinite(idx) ||
+                    idx === firstIdx ||
+                    actuallyRevealedCells.has(idx)
+                  ) continue
+                  secondHitByCell.set(
+                    idx,
+                    (secondHitByCell.get(idx) ?? 0) + posterior,
+                  )
+                }
+              }
+
+              let bestSecondHit = 0
+              for (const p of secondHitByCell.values()) {
+                bestSecondHit = Math.max(bestSecondHit, p)
+              }
+              twoStepHitProbability += pOutcome * bestSecondHit
+            }
+
+            candidate.twoStepHitProbability = twoStepHitProbability
+            candidate.adaptiveNext = true
+          }
+
           smartDigRanking.sort((a, b) =>
-            b.targetInfoGain - a.targetInfoGain ||
+            b.twoStepHitProbability - a.twoStepHitProbability ||
             b.targetHitProbability - a.targetHitProbability ||
+            b.targetInfoGain - a.targetInfoGain ||
             b.worstCaseTargetGain - a.worstCaseTargetGain ||
             a.index - b.index
           )
