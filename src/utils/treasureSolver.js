@@ -1154,6 +1154,8 @@ export function solveTreasures(
         const occupiedOpening = new Set(fixedProbabilityCells)
         const chosenOpening = []
         const outcomeCountsOpening = new Map() // idx -> Map<slug,count>
+        const targetPresenceCountsOpening = new Map() // target idx -> configurations containing it
+        const openingJointCounts = new Map() // first idx -> outcome slug -> target idx -> count
         let configurationCount = 0
         let openingNodes = 0
         let openingAborted = false
@@ -1179,8 +1181,21 @@ export function solveTreasures(
             return
           }
 
-          // "Other" is implicit. We only need to count observable treasure
-          // outcomes from target-bearing formations; p(other) = 1 - sum(p).
+          const targetCells = [...cellsInConfiguration.entries()]
+            .filter(([, name]) => slugify(name) === normalizedProbabilityTarget)
+            .map(([idx]) => idx)
+
+          for (const targetIdx of targetCells) {
+            targetPresenceCountsOpening.set(
+              targetIdx,
+              (targetPresenceCountsOpening.get(targetIdx) ?? 0) + 1,
+            )
+          }
+
+          // "Other" is implicit. Count explicit target-pattern treasure
+          // outcomes, plus their joint distribution with every target cell.
+          // The implicit "other" joint can then be derived from totals without
+          // iterating all 100 cells for every configuration.
           for (const [idx, name] of cellsInConfiguration) {
             if (actuallyRevealedCells.has(idx)) continue
             const slug = slugify(name)
@@ -1190,6 +1205,23 @@ export function solveTreasures(
               outcomeCountsOpening.set(idx, byOutcome)
             }
             byOutcome.set(slug, (byOutcome.get(slug) ?? 0) + 1)
+
+            let jointByOutcome = openingJointCounts.get(idx)
+            if (!jointByOutcome) {
+              jointByOutcome = new Map()
+              openingJointCounts.set(idx, jointByOutcome)
+            }
+            let targetCounts = jointByOutcome.get(slug)
+            if (!targetCounts) {
+              targetCounts = new Map()
+              jointByOutcome.set(slug, targetCounts)
+            }
+            for (const targetIdx of targetCells) {
+              targetCounts.set(
+                targetIdx,
+                (targetCounts.get(targetIdx) ?? 0) + 1,
+              )
+            }
           }
         }
 
@@ -1250,7 +1282,30 @@ export function solveTreasures(
           let sumSquares = 0
           let targetHitProbability = 0
           let companionProbability = 0
+          let twoStepHitProbability = 0
           const outcomes = []
+          const jointByOutcome = openingJointCounts.get(idx) ?? new Map()
+
+          const bestSecondHitForOutcome = (slug, outcomeCount) => {
+            if (outcomeCount <= 0) return 0
+            const explicitJoint = jointByOutcome.get(slug) ?? new Map()
+            let best = 0
+            for (const [targetIdx, totalTargetCount] of targetPresenceCountsOpening) {
+              if (targetIdx === idx || actuallyRevealedCells.has(targetIdx)) continue
+              let jointCount
+              if (slug === 'other') {
+                let explicitTotal = 0
+                for (const targetCounts of jointByOutcome.values()) {
+                  explicitTotal += targetCounts.get(targetIdx) ?? 0
+                }
+                jointCount = Math.max(0, totalTargetCount - explicitTotal)
+              } else {
+                jointCount = explicitJoint.get(targetIdx) ?? 0
+              }
+              best = Math.max(best, jointCount / outcomeCount)
+            }
+            return best
+          }
 
           for (const [slug, count] of counts) {
             const p = count / configurationCount
@@ -1259,8 +1314,11 @@ export function solveTreasures(
             if (slug === normalizedProbabilityTarget) {
               targetHitProbability = p
               openingTargetProbabilities.set(idx, p)
+              twoStepHitProbability += p
             } else {
               companionProbability += p
+              twoStepHitProbability +=
+                p * bestSecondHitForOutcome(slug, count)
             }
             outcomes.push({
               outcome: `treasure:${slug}`,
@@ -1269,13 +1327,16 @@ export function solveTreasures(
             })
           }
 
-          const otherProbability = Math.max(0, 1 - sumKnown)
+          const otherCount = Math.max(0, configurationCount - sumKnown * configurationCount)
+          const otherProbability = otherCount / configurationCount
           sumSquares += otherProbability * otherProbability
           if (otherProbability > 0) {
+            twoStepHitProbability +=
+              otherProbability * bestSecondHitForOutcome('other', otherCount)
             outcomes.push({
               outcome: 'other',
               probability: otherProbability,
-              count: otherProbability * configurationCount,
+              count: otherCount,
             })
           }
 
@@ -1288,25 +1349,29 @@ export function solveTreasures(
             index: idx,
             targetAware: true,
             openingMode: true,
+            adaptiveNext: true,
             probabilityBasis: 'target-pattern-configurations',
             openingConfigurationCount: configurationCount,
             targetInfoGain,
             targetHitProbability,
+            twoStepHitProbability,
             companionProbability,
             outcomes,
           })
         }
 
         ranking.sort((a, b) => {
-          // A guaranteed direct target must always win. Otherwise early-game
-          // target hit rates are nearly flat, so information gain is the main
-          // discriminator and direct hit chance breaks close ties.
+          // NEXT optimizes the chance of finding the selected target within
+          // the next TWO adaptive digs. This automatically balances a direct
+          // hit now against an informative first dig that creates a much
+          // stronger second move. Re-run after every real result.
           const aGuaranteed = a.targetHitProbability >= 1 - 1e-12
           const bGuaranteed = b.targetHitProbability >= 1 - 1e-12
           if (aGuaranteed !== bGuaranteed) return aGuaranteed ? -1 : 1
           return (
-            b.targetInfoGain - a.targetInfoGain ||
+            b.twoStepHitProbability - a.twoStepHitProbability ||
             b.targetHitProbability - a.targetHitProbability ||
+            b.targetInfoGain - a.targetInfoGain ||
             b.companionProbability - a.companionProbability ||
             a.index - b.index
           )
