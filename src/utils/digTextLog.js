@@ -234,12 +234,12 @@ export function buildDigTextLog({
 
         const info = snap.best.targetAware
           ? snap.best.openingMode
-            ? `OPENING=YES | TARGET_INFO_SPLIT=${Math.round((Number(snap.best.targetInfoGain) || 0) * 100)}% | TARGET_HIT_P=${Math.round((Number(snap.best.targetHitProbability) || 0) * 100)}% | COMPANION_P=${Math.round((Number(snap.best.companionProbability) || 0) * 100)}% | TARGET_CONFIGS=${Number(snap.best.openingConfigurationCount) || 0}`
-            : `TARGET_INFO_GAIN=${Math.round((Number(snap.best.targetInfoGain) || 0) * 100)}% | TARGET_HIT_P=${Math.round((Number(snap.best.targetHitProbability) || 0) * 100)}%`
+            ? `OPENING=YES | TARGET_INFO_SPLIT=${Math.round((Number(snap.best.targetInfoGain) || 0) * 100)}% | TARGET_HIT_P=${Math.round((Number(snap.best.targetHitProbability) || 0) * 100)}% | WITHIN_2_P=${Math.round((Number(snap.best.twoStepHitProbability) || 0) * 100)}% | COMPANION_P=${Math.round((Number(snap.best.companionProbability) || 0) * 100)}% | TARGET_CONFIGS=${Number(snap.best.openingConfigurationCount) || 0}`
+            : `TARGET_INFO_GAIN=${Math.round((Number(snap.best.targetInfoGain) || 0) * 100)}% | TARGET_HIT_P=${Math.round((Number(snap.best.targetHitProbability) || 0) * 100)}% | WITHIN_2_P=${Math.round((Number(snap.best.twoStepHitProbability) || 0) * 100)}%`
           : `EXPECTED_ELIMINATION=${Math.round((Number(snap.best.expectedElimination) || 0) * 100)}%`
 
         lines.push(
-          `  BEST: ${indexLabel(idx, gridSize)} | ${info} | FOLLOWED_NEXT=${followed ? 'YES' : 'NO'} | VERDICT=${verdict}${observed && observed.order > after ? ` | DUG_AT=#${observed.order} | ACTUAL=${observed.text}` : ''}`,
+          `  NEXT: ${indexLabel(idx, gridSize)} | ${info} | FOLLOWED_NEXT=${followed ? 'YES' : 'NO'} | VERDICT=${verdict}${observed && observed.order > after ? ` | DUG_AT=#${observed.order} | ACTUAL=${observed.text}` : ''}`,
         )
       }
 

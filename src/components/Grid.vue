@@ -64,20 +64,14 @@
           :class="probabilityBadgeClass(index)"
           :title="probabilityTitle(index)"
         >
-          <template v-if="probabilityRank(index)">#{{ probabilityRank(index) }} · </template>{{ probabilityPrefix }}{{ probabilityPercent(index) }}%
+          {{ probabilityPrefix }}{{ probabilityPercent(index) }}%
         </span>
-
-        <span
-          v-if="showProbability && targetPlanStep(index)"
-          class="plan-step-badge"
-          :title="targetPlanStepTitle(index)"
-        >P{{ targetPlanStep(index).step }}</span>
 
         <span
           v-if="showProbability && smartDig?.index === index"
           class="smart-dig-badge"
           :title="smartDigTitle"
-        >BEST</span>
+        >NEXT</span>
 
         <!-- transient shovel dig reveal overlay for freshly-dug tiles.
              Kept outside the tile-img/prediction v-if chain so it doesn't
@@ -115,6 +109,22 @@
     </div>
 
     <div
+      v-if="showProbability && probabilityTarget && smartDig && !targetComplete"
+      class="next-dig-summary"
+    >
+      <div class="font-semibold">Recommended next dig: {{ cellLabel(smartDig.index) }}</div>
+      <div class="text-[0.68rem] opacity-80">
+        {{ Math.round((smartDig.targetHitProbability ?? 0) * 100) }}% direct target chance
+        <template v-if="smartDig.adaptiveNext">
+          · ~{{ Math.round((smartDig.twoStepHitProbability ?? 0) * 100) }}% chance within 2 adaptive digs
+        </template>
+      </div>
+      <div class="text-[0.62rem] opacity-65 mt-0.5">
+        Follow NEXT first. Percentages show direct chance; the 3-dig plan below is only a fallback scenario.
+      </div>
+    </div>
+
+    <div
       v-if="showProbability && probabilityTarget && targetComplete"
       class="target-complete-summary"
     >
@@ -125,7 +135,8 @@
       v-if="showProbability && targetPlan?.steps?.length"
       class="target-plan-summary"
     >
-      <div class="font-semibold">Target plan</div>
+      <div class="font-semibold">Alternative 3-dig plan</div>
+      <div class="text-[0.65rem] opacity-70 mb-1">Use NEXT as your next move. This plan is only a fixed fallback scenario.</div>
       <div class="flex flex-wrap gap-x-3 gap-y-1 justify-center">
         <span
           v-for="step in targetPlan.steps"
@@ -367,12 +378,13 @@ const smartDigTitle = computed(() => {
   if (smartDig.value.targetAware) {
     const info = Math.round((smartDig.value.targetInfoGain ?? 0) * 100)
     const hit = Math.round((smartDig.value.targetHitProbability ?? 0) * 100)
+    const withinTwo = Math.round((smartDig.value.twoStepHitProbability ?? hit / 100) * 100)
     const companion = Math.round((smartDig.value.companionProbability ?? 0) * 100)
     const label = probabilityTarget.replace(/_/g, ' ')
     if (smartDig.value.openingMode) {
-      return `Opening BEST for ${label}: ${col}${row} — ${info}% information split; ${hit}% direct hit; ${companion}% companion-object chance`
+      return `NEXT for ${label}: ${col}${row} — ${hit}% direct hit, ~${withinTwo}% chance within 2 adaptive digs; ${companion}% companion chance; ${info}% information split`
     }
-    return `Best next dig for ${label}: ${col}${row} — removes ~${info}% of remaining target-location uncertainty; ${hit}% direct hit chance`
+    return `NEXT for ${label}: ${col}${row} — ${hit}% direct hit, ~${withinTwo}% chance within 2 adaptive digs; ${info}% target information gain`
   }
 
   const expected = Math.round((smartDig.value.expectedElimination ?? 0) * 100)
@@ -511,10 +523,6 @@ function tileClasses(tile, index) {
     classes.push('probability-top')
   }
 
-  if (showProbability && targetPlanStep(index) && !isRevealed(tile)) {
-    classes.push('target-plan-cell')
-  }
-
   if (showProbability && smartDig.value?.index === index && !isRevealed(tile)) {
     classes.push('smart-dig-cell')
   }
@@ -612,6 +620,16 @@ function getTileLabelMark (tile) {
   background: #7c3aed;
   color: white;
   pointer-events: none;
+}
+
+.next-dig-summary {
+  margin-top: 0.5rem;
+  padding: 0.5rem 0.65rem;
+  border: 2px solid rgba(124, 58, 237, 0.55);
+  border-radius: 0.6rem;
+  background: rgba(124, 58, 237, 0.10);
+  text-align: center;
+  font-size: 0.74rem;
 }
 
 .target-complete-summary {
