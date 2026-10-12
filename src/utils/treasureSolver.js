@@ -1891,6 +1891,11 @@ export function solveTreasures(
             targetAware: true,
             targetLocked: true,
             adaptiveNext: true,
+            adaptiveDepth: 1,
+            adaptiveScore: 1,
+            expectedFoundFraction: 1 / Math.max(1, targetRemainingCount),
+            expectedRemainingTargets: Math.max(0, targetRemainingCount - 1),
+            completionProbability: targetRemainingCount <= 1 ? 1 : 0,
             twoStepHitProbability: 1,
           }))
         } else if (normalizedProbabilityTarget && targetSignatureCounts.size > 1) {
