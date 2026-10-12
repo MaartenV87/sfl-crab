@@ -116,11 +116,11 @@
       <div class="text-[0.68rem] opacity-80">
         {{ Math.round((smartDig.targetHitProbability ?? 0) * 100) }}% direct target chance
         <template v-if="smartDig.adaptiveNext">
-          · ~{{ Math.round((smartDig.twoStepHitProbability ?? 0) * 100) }}% chance within 2 adaptive digs
+          · ~{{ Math.round((smartDig.expectedFoundFraction ?? smartDig.twoStepHitProbability ?? 0) * 100) }}% expected target progress within {{ smartDig.adaptiveDepth || 2 }} adaptive digs
         </template>
       </div>
       <div class="text-[0.62rem] opacity-65 mt-0.5">
-        Follow NEXT first. Percentages show direct chance; the 3-dig plan below is only a fallback scenario.
+        Follow NEXT first. The adaptive solver looks deeper automatically as fewer target layouts remain.
       </div>
     </div>
 
@@ -378,13 +378,17 @@ const smartDigTitle = computed(() => {
   if (smartDig.value.targetAware) {
     const info = Math.round((smartDig.value.targetInfoGain ?? 0) * 100)
     const hit = Math.round((smartDig.value.targetHitProbability ?? 0) * 100)
-    const withinTwo = Math.round((smartDig.value.twoStepHitProbability ?? hit / 100) * 100)
+    const progress = Math.round(((smartDig.value.expectedFoundFraction ?? smartDig.value.twoStepHitProbability) ?? hit / 100) * 100)
+    const depth = smartDig.value.adaptiveDepth || 2
+    const remaining = Number.isFinite(smartDig.value.expectedRemainingTargets)
+      ? smartDig.value.expectedRemainingTargets.toFixed(2)
+      : null
     const companion = Math.round((smartDig.value.companionProbability ?? 0) * 100)
     const label = probabilityTarget.replace(/_/g, ' ')
     if (smartDig.value.openingMode) {
-      return `NEXT for ${label}: ${col}${row} — ${hit}% direct hit, ~${withinTwo}% chance within 2 adaptive digs; ${companion}% companion chance; ${info}% information split`
+      return `NEXT for ${label}: ${col}${row} — ${hit}% direct hit, ~${progress}% adaptive target progress; ${companion}% companion chance; ${info}% information split`
     }
-    return `NEXT for ${label}: ${col}${row} — ${hit}% direct hit, ~${withinTwo}% chance within 2 adaptive digs; ${info}% target information gain`
+    return `NEXT for ${label}: ${col}${row} — ${hit}% direct hit, depth ${depth}; ~${progress}% expected target progress${remaining !== null ? `; ~${remaining} targets expected left after horizon` : ''}`
   }
 
   const expected = Math.round((smartDig.value.expectedElimination ?? 0) * 100)
