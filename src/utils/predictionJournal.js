@@ -1,7 +1,7 @@
 import { getTodayUTC } from '@/utils/buildDigTimeline.js'
 
 export const PREDICTION_JOURNAL_VERSION = 1
-export const PREDICTION_ALGORITHM_VERSION = 'adaptive-next-v3'
+export const PREDICTION_ALGORITHM_VERSION = 'adaptive-next-v4'
 
 function storageKey(landId, utcDate) {
   return `predictionJournal_${String(landId || '0')}_${utcDate || getTodayUTC()}`
@@ -52,6 +52,12 @@ function normalizeBest(best) {
     probabilityBasis: String(best.probabilityBasis || ''),
     adaptiveNext: Boolean(best.adaptiveNext),
     twoStepHitProbability: Number(best.twoStepHitProbability) || 0,
+    adaptiveDepth: Number(best.adaptiveDepth) || 0,
+    adaptiveScore: Number(best.adaptiveScore) || 0,
+    expectedFoundFraction: Number(best.expectedFoundFraction) || 0,
+    expectedRemainingTargets: Number(best.expectedRemainingTargets) || 0,
+    completionProbability: Number(best.completionProbability) || 0,
+    lookaheadCapped: Boolean(best.lookaheadCapped),
   }
 }
 
