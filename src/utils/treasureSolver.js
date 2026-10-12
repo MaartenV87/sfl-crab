@@ -1358,6 +1358,16 @@ export function solveTreasures(
             targetInfoGain,
             targetHitProbability,
             twoStepHitProbability,
+            adaptiveDepth: 2,
+            expectedFoundFraction:
+              twoStepHitProbability / Math.max(1, targetRemainingCount),
+            expectedRemainingTargets: Math.max(
+              0,
+              targetRemainingCount - twoStepHitProbability,
+            ),
+            completionProbability:
+              targetRemainingCount <= 1 ? twoStepHitProbability : 0,
+            adaptiveScore: twoStepHitProbability,
             companionProbability,
             outcomes,
           })
