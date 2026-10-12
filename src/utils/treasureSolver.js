@@ -956,6 +956,9 @@ export function solveTreasures(
     const targetJointCounts = new Map()
     const targetSignatureCounts = new Map()
     const targetSolutionCells = [] // exact solutions only; each entry is a small sorted idx[]
+    const solutionOutcomeCodes = [] // exact solutions; Uint8Array over all cells
+    const outcomeCodeByName = new Map([['sand', 1], ['crab', 2]])
+    let nextOutcomeCode = 3
     const normalizedProbabilityTarget = slugify(probabilityTarget)
 
     if (normalizedProbabilityTarget) {
@@ -1355,6 +1358,16 @@ export function solveTreasures(
             targetInfoGain,
             targetHitProbability,
             twoStepHitProbability,
+            adaptiveDepth: 2,
+            expectedFoundFraction:
+              twoStepHitProbability / Math.max(1, targetRemainingCount),
+            expectedRemainingTargets: Math.max(
+              0,
+              targetRemainingCount - twoStepHitProbability,
+            ),
+            completionProbability:
+              targetRemainingCount <= 1 ? twoStepHitProbability : 0,
+            adaptiveScore: twoStepHitProbability,
             companionProbability,
             outcomes,
           })
@@ -1533,6 +1546,41 @@ export function solveTreasures(
             )
           }
         }
+
+        // Compact per-solution outcome vector for adaptive v4 lookahead.
+        // 1=sand, 2=crab, 3+=specific treasure. This preserves correlations
+        // between outcomes at different cells without keeping 100 strings per
+        // solution (~2 MB at the 20k-solution cap).
+        const encoded = new Uint8Array(totalCells)
+        for (let idx = 0; idx < totalCells; idx++) {
+          let outcomeName
+          const treasureName = cellsInSolution.get(idx)
+          if (treasureName !== undefined) {
+            outcomeName = `treasure:${slugify(treasureName)}`
+          } else {
+            const x = idx % gridSize
+            const y = Math.floor(idx / gridSize)
+            let nextToTreasure = false
+            for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+              const nx = x + dx
+              const ny = y + dy
+              if (inBounds(nx, ny) && cellsInSolution.has(ny * gridSize + nx)) {
+                nextToTreasure = true
+                break
+              }
+            }
+            outcomeName = nextToTreasure ? 'crab' : 'sand'
+          }
+          let code = outcomeCodeByName.get(outcomeName)
+          if (!code) {
+            code = nextOutcomeCode++
+            // Uint8Array safely supports today's tiny outcome vocabulary.
+            if (code > 255) code = 255
+            outcomeCodeByName.set(outcomeName, code)
+          }
+          encoded[idx] = code
+        }
+        solutionOutcomeCodes.push(encoded)
       }
 
       const revealEntries = [...revealedTreasureName]
@@ -1853,6 +1901,11 @@ export function solveTreasures(
             targetAware: true,
             targetLocked: true,
             adaptiveNext: true,
+            adaptiveDepth: 1,
+            adaptiveScore: 1,
+            expectedFoundFraction: 1 / Math.max(1, targetRemainingCount),
+            expectedRemainingTargets: Math.max(0, targetRemainingCount - 1),
+            completionProbability: targetRemainingCount <= 1 ? 1 : 0,
             twoStepHitProbability: 1,
           }))
         } else if (normalizedProbabilityTarget && targetSignatureCounts.size > 1) {
@@ -1943,72 +1996,220 @@ export function solveTreasures(
             })
           }
 
-          // Convert target-aware information ranking into an adaptive
-          // two-dig policy. For each possible first-dig outcome, compute the
-          // best second target cell under the posterior over UNIQUE target
-          // layouts. This directly optimizes P(find target within <=2 digs),
-          // which is closer to the user's real goal than pure entropy reduction.
-          for (const candidate of smartDigRanking) {
-            let twoStepHitProbability = 0
-            const firstIdx = candidate.index
-            const byOutcome = targetJointCounts.get(firstIdx) ?? new Map()
+          // Adaptive v4: choose NEXT by expected progress toward finding ALL
+          // remaining targets, not merely by entropy or one target within two
+          // digs. Search depth grows automatically as the target-layout space
+          // shrinks. Outcomes come from full exact boards, so Crab, Sand and
+          // specific treasure results remain distinct.
+          const adaptiveDepth =
+            layoutCount > 10000 ? 2 :
+              layoutCount > 1000 ? 3 :
+                layoutCount > 100 ? 4 :
+                  layoutCount > 20 ? 5 : 6
 
-            for (const [outcome, bySignature] of byOutcome) {
-              const likelihoods = []
-              let likelihoodSum = 0
+          const adaptivePoolSize =
+            adaptiveDepth <= 2 ? 14 :
+              adaptiveDepth === 3 ? 9 :
+                adaptiveDepth === 4 ? 7 :
+                  adaptiveDepth === 5 ? 6 : 5
 
-              for (const signature of signatures) {
-                const layoutSolutions = targetSignatureCounts.get(signature) ?? 0
-                if (layoutSolutions <= 0) continue
-                const matchingSolutions = bySignature.get(signature) ?? 0
-                const likelihood = matchingSolutions / layoutSolutions
-                if (likelihood <= 0) continue
-                likelihoods.push([signature, likelihood])
-                likelihoodSum += likelihood
-              }
+          // Equal prior over UNIQUE target layouts. Full-board solutions that
+          // share the same target layout split that layout's prior mass.
+          const solutionWeights = targetSolutionCells.map(cells => {
+            const signature = cells.join(',')
+            const multiplicity = targetSignatureCounts.get(signature) ?? 1
+            return 1 / (layoutCount * multiplicity)
+          })
 
-              if (likelihoodSum <= 0) continue
-              const pOutcome = likelihoodSum / layoutCount
+          // Candidate pool combines target-hit strength and one-step
+          // information value so deeper search can select informative
+          // companion/crab/sand probes as well as obvious target cells.
+          const candidateIndexes = []
+          const addCandidate = idx => {
+            if (
+              Number.isFinite(idx) &&
+              !actuallyRevealedCells.has(idx) &&
+              !candidateIndexes.includes(idx)
+            ) candidateIndexes.push(idx)
+          }
 
-              if (outcome === `treasure:${normalizedProbabilityTarget}`) {
-                twoStepHitProbability += pOutcome
-                continue
-              }
+          ;[...smartDigRanking]
+            .sort((a, b) =>
+              b.targetInfoGain - a.targetInfoGain ||
+              b.targetHitProbability - a.targetHitProbability ||
+              a.index - b.index
+            )
+            .slice(0, adaptivePoolSize)
+            .forEach(item => addCandidate(item.index))
 
-              const secondHitByCell = new Map()
-              for (const [signature, likelihood] of likelihoods) {
-                const posterior = likelihood / likelihoodSum
-                if (!signature) continue
-                for (const token of signature.split(',')) {
-                  const idx = Number(token)
-                  if (
-                    !Number.isFinite(idx) ||
-                    idx === firstIdx ||
-                    actuallyRevealedCells.has(idx)
-                  ) continue
-                  secondHitByCell.set(
-                    idx,
-                    (secondHitByCell.get(idx) ?? 0) + posterior,
-                  )
-                }
-              }
+          ;[...targetProbabilities.entries()]
+            .sort((a, b) => b[1] - a[1] || a[0] - b[0])
+            .slice(0, adaptivePoolSize)
+            .forEach(([idx]) => addCandidate(idx))
 
-              let bestSecondHit = 0
-              for (const p of secondHitByCell.values()) {
-                bestSecondHit = Math.max(bestSecondHit, p)
-              }
-              twoStepHitProbability += pOutcome * bestSecondHit
+          const pool = candidateIndexes.slice(0, adaptivePoolSize)
+          const initialSolutions = Array.from(
+            { length: targetSolutionCells.length },
+            (_, i) => i,
+          )
+
+          let adaptiveNodes = 0
+          const ADAPTIVE_NODE_CAP = 40000
+          let adaptiveCapped = false
+
+          const stateWeight = solutionIndexes => {
+            let sum = 0
+            for (const si of solutionIndexes) sum += solutionWeights[si] ?? 0
+            return sum
+          }
+
+          const leafMetrics = (solutionIndexes, dug) => {
+            const totalWeight = stateWeight(solutionIndexes)
+            if (totalWeight <= 0) {
+              return { utility: 0, foundFraction: 0, completionProbability: 0 }
             }
 
-            candidate.twoStepHitProbability = twoStepHitProbability
+            let foundFraction = 0
+            let completionProbability = 0
+
+            for (const si of solutionIndexes) {
+              const w = (solutionWeights[si] ?? 0) / totalWeight
+              const cells = targetSolutionCells[si] || []
+              const denom = Math.max(1, cells.length)
+              let found = 0
+              for (const idx of cells) if (dug.has(idx)) found += 1
+              foundFraction += w * (found / denom)
+              if (found >= cells.length) completionProbability += w
+            }
+
+            // Completion gets an explicit bonus, but expected fraction found
+            // remains the main signal while several target copies are left.
+            return {
+              utility: foundFraction + 0.35 * completionProbability,
+              foundFraction,
+              completionProbability,
+            }
+          }
+
+          const evaluateState = (solutionIndexes, dug, depth) => {
+            if (depth <= 0 || !solutionIndexes.length) {
+              return leafMetrics(solutionIndexes, dug)
+            }
+
+            adaptiveNodes += 1
+            if (adaptiveNodes > ADAPTIVE_NODE_CAP) {
+              adaptiveCapped = true
+              return leafMetrics(solutionIndexes, dug)
+            }
+
+            let best = leafMetrics(solutionIndexes, dug)
+
+            for (const action of pool) {
+              if (dug.has(action)) continue
+
+              const partitions = new Map()
+              for (const si of solutionIndexes) {
+                const code = solutionOutcomeCodes[si]?.[action] ?? 0
+                if (!partitions.has(code)) partitions.set(code, [])
+                partitions.get(code).push(si)
+              }
+
+              const totalWeight = stateWeight(solutionIndexes)
+              if (totalWeight <= 0) continue
+
+              const nextDug = new Set(dug)
+              nextDug.add(action)
+
+              let utility = 0
+              let foundFraction = 0
+              let completionProbability = 0
+
+              for (const branchSolutions of partitions.values()) {
+                const branchWeight = stateWeight(branchSolutions)
+                if (branchWeight <= 0) continue
+                const p = branchWeight / totalWeight
+                const result = evaluateState(
+                  branchSolutions,
+                  nextDug,
+                  depth - 1,
+                )
+                utility += p * result.utility
+                foundFraction += p * result.foundFraction
+                completionProbability += p * result.completionProbability
+              }
+
+              if (
+                utility > best.utility + 1e-12 ||
+                (
+                  Math.abs(utility - best.utility) <= 1e-12 &&
+                  completionProbability > best.completionProbability
+                )
+              ) {
+                best = { utility, foundFraction, completionProbability }
+              }
+            }
+
+            return best
+          }
+
+          for (const candidate of smartDigRanking) {
+            const firstIdx = candidate.index
+            if (!pool.includes(firstIdx)) {
+              candidate.adaptiveScore = 0
+              candidate.expectedFoundFraction = candidate.targetHitProbability
+              candidate.completionProbability = 0
+              candidate.adaptiveDepth = adaptiveDepth
+              candidate.adaptiveNext = true
+              continue
+            }
+
+            const partitions = new Map()
+            for (const si of initialSolutions) {
+              const code = solutionOutcomeCodes[si]?.[firstIdx] ?? 0
+              if (!partitions.has(code)) partitions.set(code, [])
+              partitions.get(code).push(si)
+            }
+
+            const dug = new Set([firstIdx])
+            let adaptiveScore = 0
+            let expectedFoundFraction = 0
+            let completionProbability = 0
+
+            for (const branchSolutions of partitions.values()) {
+              const branchWeight = stateWeight(branchSolutions)
+              if (branchWeight <= 0) continue
+              const result = evaluateState(
+                branchSolutions,
+                dug,
+                adaptiveDepth - 1,
+              )
+              adaptiveScore += branchWeight * result.utility
+              expectedFoundFraction += branchWeight * result.foundFraction
+              completionProbability +=
+                branchWeight * result.completionProbability
+            }
+
+            candidate.adaptiveScore = adaptiveScore
+            candidate.expectedFoundFraction = expectedFoundFraction
+            candidate.expectedRemainingTargets = Math.max(
+              0,
+              targetRemainingCount * (1 - expectedFoundFraction),
+            )
+            candidate.completionProbability = completionProbability
+            candidate.adaptiveDepth = adaptiveDepth
             candidate.adaptiveNext = true
+            candidate.lookaheadCapped = adaptiveCapped
+            // Backward-compatible field for UI/logs; now means probability of
+            // progress within the adaptive horizon rather than fixed 2 digs.
+            candidate.twoStepHitProbability = expectedFoundFraction
           }
 
           smartDigRanking.sort((a, b) =>
-            b.twoStepHitProbability - a.twoStepHitProbability ||
+            b.adaptiveScore - a.adaptiveScore ||
+            b.completionProbability - a.completionProbability ||
+            b.expectedFoundFraction - a.expectedFoundFraction ||
             b.targetHitProbability - a.targetHitProbability ||
             b.targetInfoGain - a.targetInfoGain ||
-            b.worstCaseTargetGain - a.worstCaseTargetGain ||
             a.index - b.index
           )
         } else {

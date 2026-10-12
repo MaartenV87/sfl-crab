@@ -114,18 +114,18 @@ describe('treasure probability enumeration', () => {
     expect(result.smartDig.targetHitProbability).toBeGreaterThanOrEqual(0)
 
     expect(result.smartDig.adaptiveNext).toBe(true)
-    expect(result.smartDig.twoStepHitProbability).toBeGreaterThanOrEqual(
-      result.smartDig.targetHitProbability,
-    )
+    expect(result.smartDig.adaptiveDepth).toBeGreaterThanOrEqual(2)
+    expect(result.smartDig.expectedFoundFraction).toBeGreaterThanOrEqual(0)
+    expect(result.smartDig.expectedRemainingTargets).toBeGreaterThanOrEqual(0)
 
     for (let i = 1; i < result.smartDigRanking.length; i++) {
       const prev = result.smartDigRanking[i - 1]
       const next = result.smartDigRanking[i]
       expect(
-        prev.twoStepHitProbability > next.twoStepHitProbability ||
+        prev.adaptiveScore > next.adaptiveScore ||
         (
-          prev.twoStepHitProbability === next.twoStepHitProbability &&
-          prev.targetHitProbability >= next.targetHitProbability
+          prev.adaptiveScore === next.adaptiveScore &&
+          prev.completionProbability >= next.completionProbability
         )
       ).toBe(true)
     }
@@ -184,9 +184,11 @@ describe('treasure probability enumeration', () => {
     expect(result.smartDig.targetInfoGain).toBeGreaterThan(0)
     expect(result.smartDig.targetHitProbability).toBeGreaterThan(0)
     expect(result.smartDig.adaptiveNext).toBe(true)
+    expect(result.smartDig.adaptiveDepth).toBe(2)
     expect(result.smartDig.twoStepHitProbability).toBeGreaterThanOrEqual(
       result.smartDig.targetHitProbability,
     )
+    expect(result.smartDig.expectedRemainingTargets).toBeGreaterThanOrEqual(0)
     expect(result.targetProbabilities.size).toBeGreaterThan(0)
   })
 

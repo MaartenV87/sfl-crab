@@ -173,9 +173,9 @@ export function buildDigTextLog({
   } else {
     let testedTop1 = 0
     let hitTop1 = 0
-    let testedBest = 0
-    let hitBest = 0
-    let followedBest = 0
+    let testedNext = 0
+    let hitNext = 0
+    let followedNext = 0
 
     for (const snap of journal) {
       const after = Number(snap.afterDigOrder) || 0
@@ -223,19 +223,19 @@ export function buildDigTextLog({
         const idx = Number(snap.best.index)
         const observed = moveByCell.get(idx)
         const followed = nextIndexes.has(idx)
-        if (followed) followedBest += 1
+        if (followed) followedNext += 1
         let verdict = 'PENDING'
         if (observed && observed.order > after) {
-          testedBest += 1
+          testedNext += 1
           const hit = observed.slugs.includes(target)
-          if (hit) hitBest += 1
+          if (hit) hitNext += 1
           verdict = hit ? 'TARGET_HIT' : 'NO_TARGET'
         }
 
         const info = snap.best.targetAware
           ? snap.best.openingMode
             ? `OPENING=YES | TARGET_INFO_SPLIT=${Math.round((Number(snap.best.targetInfoGain) || 0) * 100)}% | TARGET_HIT_P=${Math.round((Number(snap.best.targetHitProbability) || 0) * 100)}% | WITHIN_2_P=${Math.round((Number(snap.best.twoStepHitProbability) || 0) * 100)}% | COMPANION_P=${Math.round((Number(snap.best.companionProbability) || 0) * 100)}% | TARGET_CONFIGS=${Number(snap.best.openingConfigurationCount) || 0}`
-            : `TARGET_INFO_GAIN=${Math.round((Number(snap.best.targetInfoGain) || 0) * 100)}% | TARGET_HIT_P=${Math.round((Number(snap.best.targetHitProbability) || 0) * 100)}% | WITHIN_2_P=${Math.round((Number(snap.best.twoStepHitProbability) || 0) * 100)}%`
+            : `TARGET_INFO_GAIN=${Math.round((Number(snap.best.targetInfoGain) || 0) * 100)}% | TARGET_HIT_P=${Math.round((Number(snap.best.targetHitProbability) || 0) * 100)}% | DEPTH=${Number(snap.best.adaptiveDepth) || 0} | EXPECTED_FOUND=${Math.round((Number(snap.best.expectedFoundFraction) || 0) * 100)}% | COMPLETION_P=${Math.round((Number(snap.best.completionProbability) || 0) * 100)}% | EXPECTED_LEFT=${Number(snap.best.expectedRemainingTargets) || 0}`
           : `EXPECTED_ELIMINATION=${Math.round((Number(snap.best.expectedElimination) || 0) * 100)}%`
 
         lines.push(
@@ -253,7 +253,7 @@ export function buildDigTextLog({
     }
 
     lines.push(
-      `PREDICTION_SUMMARY: TOP1_TESTED=${testedTop1} TOP1_HITS=${hitTop1} BEST_TESTED=${testedBest} BEST_TARGET_HITS=${hitBest} BEST_FOLLOWED_NEXT=${followedBest}`,
+      `PREDICTION_SUMMARY: TOP1_TESTED=${testedTop1} TOP1_HITS=${hitTop1} NEXT_TESTED=${testedNext} NEXT_TARGET_HITS=${hitNext} NEXT_FOLLOWED=${followedNext}`,
     )
   }
 
