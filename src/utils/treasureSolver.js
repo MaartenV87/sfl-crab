@@ -956,6 +956,9 @@ export function solveTreasures(
     const targetJointCounts = new Map()
     const targetSignatureCounts = new Map()
     const targetSolutionCells = [] // exact solutions only; each entry is a small sorted idx[]
+    const solutionOutcomeCodes = [] // exact solutions; Uint8Array over all cells
+    const outcomeCodeByName = new Map([['sand', 1], ['crab', 2]])
+    let nextOutcomeCode = 3
     const normalizedProbabilityTarget = slugify(probabilityTarget)
 
     if (normalizedProbabilityTarget) {
@@ -1533,6 +1536,41 @@ export function solveTreasures(
             )
           }
         }
+
+        // Compact per-solution outcome vector for adaptive v4 lookahead.
+        // 1=sand, 2=crab, 3+=specific treasure. This preserves correlations
+        // between outcomes at different cells without keeping 100 strings per
+        // solution (~2 MB at the 20k-solution cap).
+        const encoded = new Uint8Array(totalCells)
+        for (let idx = 0; idx < totalCells; idx++) {
+          let outcomeName
+          const treasureName = cellsInSolution.get(idx)
+          if (treasureName !== undefined) {
+            outcomeName = `treasure:${slugify(treasureName)}`
+          } else {
+            const x = idx % gridSize
+            const y = Math.floor(idx / gridSize)
+            let nextToTreasure = false
+            for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+              const nx = x + dx
+              const ny = y + dy
+              if (inBounds(nx, ny) && cellsInSolution.has(ny * gridSize + nx)) {
+                nextToTreasure = true
+                break
+              }
+            }
+            outcomeName = nextToTreasure ? 'crab' : 'sand'
+          }
+          let code = outcomeCodeByName.get(outcomeName)
+          if (!code) {
+            code = nextOutcomeCode++
+            // Uint8Array safely supports today's tiny outcome vocabulary.
+            if (code > 255) code = 255
+            outcomeCodeByName.set(outcomeName, code)
+          }
+          encoded[idx] = code
+        }
+        solutionOutcomeCodes.push(encoded)
       }
 
       const revealEntries = [...revealedTreasureName]
