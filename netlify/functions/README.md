@@ -29,13 +29,23 @@ Daily pattern cache in store `practice-daily-patterns`. See `_practiceDailyStore
 
 ## Sunflower Land proxy (`sfl-api`)
 
-Proxies `/.netlify/functions/sfl-api/*` → `api.sunflower-land.com` (or `api-dev` when the client sends `x-sfl-api-env: test`).
+The proxy deliberately exposes **one read-only route only**:
 
-Structured logs go to **Netlify function logs** (Site → Functions → sfl-api → Logs). Each line looks like:
+`/.netlify/functions/sfl-api/community/farms/:numericLandId`
 
-`sfl-api { env, path, landId, status, cache: 'hit' | 'miss' }`
+The legacy `/visit/:numericLandId` URL is accepted for compatibility but is normalized server-side to the same community-farm endpoint. Arbitrary Sunflower Land API paths are rejected, so the server-side API key cannot be used as a general-purpose proxy credential.
 
-Only HTTP 200 responses are cached in-memory for 60s. Send `x-sfl-bypass-cache: 1` (or `?bypassCache=1`) to skip the cache — the app does this on every land sync / Refresh Data click. `/visit/*` often returns 401 for third-party tools — the app uses `/community/farms/*` instead.
+Browser CORS is limited to the production/beta site origins, localhost for development, Netlify's current deploy origins, and optional comma-separated `SFL_PROXY_ALLOWED_ORIGINS`. This is defense in depth; endpoint allowlisting and server-side throttling remain the real security boundary.
+
+Structured logs go to **Netlify function logs** (Site → Functions → sfl-api → Logs). The key and outbound authentication headers are never logged.
+
+Successful responses are cached in-memory for 60s. User refresh may request bypass with the `x-sfl-bypass-cache: 1` header, but:
+- query-string bypass is rejected/ignored;
+- bypass requests are client-rate-limited;
+- a warm function instance will not hit SFL more than once per 15 seconds for the same farm/environment;
+- normal requests are also client-rate-limited.
+
+These in-memory limits are abuse reduction, not a globally distributed WAF. For higher traffic, add platform-level Netlify rate limiting in front of the function as well.
 
 ## Admin UI (`/admin`)
 
