@@ -1159,6 +1159,13 @@ export function solveTreasures(
         const outcomeCountsOpening = new Map() // idx -> Map<slug,count>
         const targetPresenceCountsOpening = new Map() // target idx -> configurations containing it
         const openingJointCounts = new Map() // first idx -> outcome slug -> target idx -> count
+        // Keep compact target-bearing configurations only while the reduced
+        // search is small enough for deeper expected-cost planning. Large
+        // openings still use the cheap aggregate model and do not pay this
+        // memory cost.
+        const openingRecords = []
+        let openingRecordsComplete = true
+        const OPENING_DEEP_CONFIG_CAP = 5000
         let configurationCount = 0
         let openingNodes = 0
         let openingAborted = false
@@ -1185,8 +1192,25 @@ export function solveTreasures(
           }
 
           const targetCells = [...cellsInConfiguration.entries()]
-            .filter(([, name]) => slugify(name) === normalizedProbabilityTarget)
+            .filter(([idx, name]) =>
+              !actuallyRevealedCells.has(idx) &&
+              slugify(name) === normalizedProbabilityTarget
+            )
             .map(([idx]) => idx)
+            .sort((a, b) => a - b)
+
+          if (openingRecordsComplete) {
+            if (openingRecords.length < OPENING_DEEP_CONFIG_CAP) {
+              const hiddenCells = new Map()
+              for (const [idx, name] of cellsInConfiguration) {
+                if (!actuallyRevealedCells.has(idx)) hiddenCells.set(idx, name)
+              }
+              openingRecords.push({ targetCells, cells: hiddenCells })
+            } else {
+              openingRecordsComplete = false
+              openingRecords.length = 0
+            }
+          }
 
           for (const targetIdx of targetCells) {
             targetPresenceCountsOpening.set(
@@ -1275,7 +1299,56 @@ export function solveTreasures(
 
         if (openingAborted || configurationCount === 0) return null
 
+        const deepTargetModel =
+          openingRecordsComplete &&
+          openingRecords.length === configurationCount &&
+          configurationCount <= OPENING_DEEP_CONFIG_CAP
+
         const openingTargetProbabilities = new Map()
+        let openingLayoutCount = 0
+        let openingLayoutGroups = null
+        let openingRecordWeights = null
+
+        if (deepTargetModel) {
+          // Equal prior over DISTINCT remaining-target layouts. Companion
+          // placements only define P(outcome | layout), never the prior.
+          openingLayoutGroups = new Map()
+          for (let ri = 0; ri < openingRecords.length; ri++) {
+            const signature = openingRecords[ri].targetCells.join(',')
+            if (!openingLayoutGroups.has(signature)) {
+              openingLayoutGroups.set(signature, [])
+            }
+            openingLayoutGroups.get(signature).push(ri)
+          }
+          openingLayoutCount = openingLayoutGroups.size
+          openingRecordWeights = new Array(openingRecords.length).fill(0)
+
+          for (const [signature, recordIndexes] of openingLayoutGroups) {
+            const layoutWeight = openingLayoutCount > 0
+              ? 1 / openingLayoutCount
+              : 0
+            const perRecord = recordIndexes.length > 0
+              ? layoutWeight / recordIndexes.length
+              : 0
+            for (const ri of recordIndexes) openingRecordWeights[ri] = perRecord
+
+            if (!signature) continue
+            for (const token of signature.split(',')) {
+              const idx = Number(token)
+              if (!Number.isFinite(idx)) continue
+              openingTargetProbabilities.set(
+                idx,
+                (openingTargetProbabilities.get(idx) ?? 0) + layoutWeight,
+              )
+            }
+          }
+        } else {
+          // Large opening: retain the low-memory configuration estimate.
+          for (const [idx, count] of targetPresenceCountsOpening) {
+            openingTargetProbabilities.set(idx, count / configurationCount)
+          }
+        }
+
         const ranking = []
 
         for (const [idx, counts] of outcomeCountsOpening) {
@@ -1315,8 +1388,7 @@ export function solveTreasures(
             sumKnown += p
             sumSquares += p * p
             if (slug === normalizedProbabilityTarget) {
-              targetHitProbability = p
-              openingTargetProbabilities.set(idx, p)
+              targetHitProbability = openingTargetProbabilities.get(idx) ?? p
               twoStepHitProbability += p
             } else {
               companionProbability += p
