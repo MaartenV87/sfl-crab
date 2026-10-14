@@ -1902,7 +1902,8 @@ export function solveTreasures(
             targetLocked: true,
             adaptiveNext: true,
             adaptiveDepth: 1,
-            adaptiveScore: 1,
+            adaptiveScore: -Math.max(1, targetRemainingCount),
+            expectedDigsToComplete: Math.max(1, targetRemainingCount),
             expectedFoundFraction: 1 / Math.max(1, targetRemainingCount),
             expectedRemainingTargets: Math.max(0, targetRemainingCount - 1),
             completionProbability: targetRemainingCount <= 1 ? 1 : 0,
@@ -1996,34 +1997,37 @@ export function solveTreasures(
             })
           }
 
-          // Adaptive v4: choose NEXT by expected progress toward finding ALL
-          // remaining targets, not merely by entropy or one target within two
-          // digs. Search depth grows automatically as the target-layout space
-          // shrinks. Outcomes come from full exact boards, so Crab, Sand and
-          // specific treasure results remain distinct.
+          // Adaptive v5: minimize EXPECTED DIGS TO COMPLETION.
+          //
+          // v4 maximized progress/completion inside a fixed horizon. That can
+          // prefer a pure information probe over a 50/50 direct target even
+          // when the latter has a lower expected number of digs. v5 assigns
+          // every candidate an expected remaining dig cost:
+          //
+          //   cost(action) = 1 + Σ P(outcome) * bestCost(nextState)
+          //
+          // The exact search is bounded and uses a conservative leaf estimate
+          // when the horizon/node budget is exhausted.
           const adaptiveDepth =
             layoutCount > 10000 ? 2 :
               layoutCount > 1000 ? 3 :
                 layoutCount > 100 ? 4 :
-                  layoutCount > 20 ? 5 : 6
+                  layoutCount > 20 ? 6 : 8
 
           const adaptivePoolSize =
             adaptiveDepth <= 2 ? 14 :
-              adaptiveDepth === 3 ? 9 :
-                adaptiveDepth === 4 ? 7 :
-                  adaptiveDepth === 5 ? 6 : 5
+              adaptiveDepth === 3 ? 10 :
+                adaptiveDepth === 4 ? 8 :
+                  adaptiveDepth === 6 ? 8 : 10
 
-          // Equal prior over UNIQUE target layouts. Full-board solutions that
-          // share the same target layout split that layout's prior mass.
+          // Equal prior over UNIQUE target layouts. Multiple compatible
+          // full-board completions of the same target layout split its weight.
           const solutionWeights = targetSolutionCells.map(cells => {
             const signature = cells.join(',')
             const multiplicity = targetSignatureCounts.get(signature) ?? 1
             return 1 / (layoutCount * multiplicity)
           })
 
-          // Candidate pool combines target-hit strength and one-step
-          // information value so deeper search can select informative
-          // companion/crab/sand probes as well as obvious target cells.
           const candidateIndexes = []
           const addCandidate = idx => {
             if (
@@ -2033,6 +2037,13 @@ export function solveTreasures(
             ) candidateIndexes.push(idx)
           }
 
+          // Always include the strongest direct target cells first.
+          ;[...targetProbabilities.entries()]
+            .sort((a, b) => b[1] - a[1] || a[0] - b[0])
+            .slice(0, adaptivePoolSize)
+            .forEach(([idx]) => addCandidate(idx))
+
+          // Then include informative probes (Crab/Sand/companions can be useful).
           ;[...smartDigRanking]
             .sort((a, b) =>
               b.targetInfoGain - a.targetInfoGain ||
@@ -2042,11 +2053,6 @@ export function solveTreasures(
             .slice(0, adaptivePoolSize)
             .forEach(item => addCandidate(item.index))
 
-          ;[...targetProbabilities.entries()]
-            .sort((a, b) => b[1] - a[1] || a[0] - b[0])
-            .slice(0, adaptivePoolSize)
-            .forEach(([idx]) => addCandidate(idx))
-
           const pool = candidateIndexes.slice(0, adaptivePoolSize)
           const initialSolutions = Array.from(
             { length: targetSolutionCells.length },
@@ -2054,8 +2060,9 @@ export function solveTreasures(
           )
 
           let adaptiveNodes = 0
-          const ADAPTIVE_NODE_CAP = 40000
+          const ADAPTIVE_NODE_CAP = 75000
           let adaptiveCapped = false
+          const memo = new Map()
 
           const stateWeight = solutionIndexes => {
             let sum = 0
@@ -2063,47 +2070,82 @@ export function solveTreasures(
             return sum
           }
 
-          const leafMetrics = (solutionIndexes, dug) => {
-            const totalWeight = stateWeight(solutionIndexes)
-            if (totalWeight <= 0) {
-              return { utility: 0, foundFraction: 0, completionProbability: 0 }
+          const isCompleteForSolution = (si, dug) => {
+            for (const idx of targetSolutionCells[si] || []) {
+              if (!dug.has(idx)) return false
             }
-
-            let foundFraction = 0
-            let completionProbability = 0
-
-            for (const si of solutionIndexes) {
-              const w = (solutionWeights[si] ?? 0) / totalWeight
-              const cells = targetSolutionCells[si] || []
-              const denom = Math.max(1, cells.length)
-              let found = 0
-              for (const idx of cells) if (dug.has(idx)) found += 1
-              foundFraction += w * (found / denom)
-              if (found >= cells.length) completionProbability += w
-            }
-
-            // Completion gets an explicit bonus, but expected fraction found
-            // remains the main signal while several target copies are left.
-            return {
-              utility: foundFraction + 0.35 * completionProbability,
-              foundFraction,
-              completionProbability,
-            }
+            return true
           }
 
-          const evaluateState = (solutionIndexes, dug, depth) => {
-            if (depth <= 0 || !solutionIndexes.length) {
-              return leafMetrics(solutionIndexes, dug)
+          const completionProbabilityForState = (solutionIndexes, dug) => {
+            const totalWeight = stateWeight(solutionIndexes)
+            if (totalWeight <= 0) return 1
+            let done = 0
+            for (const si of solutionIndexes) {
+              if (isCompleteForSolution(si, dug)) {
+                done += solutionWeights[si] ?? 0
+              }
             }
+            return done / totalWeight
+          }
+
+          const expectedMissingTargets = (solutionIndexes, dug) => {
+            const totalWeight = stateWeight(solutionIndexes)
+            if (totalWeight <= 0) return 0
+            let expected = 0
+            for (const si of solutionIndexes) {
+              let missing = 0
+              for (const idx of targetSolutionCells[si] || []) {
+                if (!dug.has(idx)) missing += 1
+              }
+              expected += ((solutionWeights[si] ?? 0) / totalWeight) * missing
+            }
+            return expected
+          }
+
+          // Admissible-ish practical leaf estimate: every still-missing target
+          // needs at least one dig. Add a small ambiguity penalty because when
+          // layouts still disagree, some misses/probes are normally required.
+          const leafExpectedCost = (solutionIndexes, dug) => {
+            const missing = expectedMissingTargets(solutionIndexes, dug)
+            if (missing <= 1e-12) return 0
+
+            const signatures = new Set()
+            for (const si of solutionIndexes) {
+              const remaining = (targetSolutionCells[si] || [])
+                .filter(idx => !dug.has(idx))
+                .join(',')
+              signatures.add(remaining)
+            }
+            const ambiguityPenalty = signatures.size > 1
+              ? Math.min(1.5, Math.log2(signatures.size) * 0.15)
+              : 0
+            return missing + ambiguityPenalty
+          }
+
+          const keyForState = (solutionIndexes, dug, depth) =>
+            `${depth}|${solutionIndexes.join(',')}|${[...dug].sort((a,b)=>a-b).join(',')}`
+
+          const evaluateCost = (solutionIndexes, dug, depth) => {
+            const completion = completionProbabilityForState(solutionIndexes, dug)
+            if (completion >= 1 - 1e-12) return 0
+            if (depth <= 0 || !solutionIndexes.length) {
+              return leafExpectedCost(solutionIndexes, dug)
+            }
+
+            const key = keyForState(solutionIndexes, dug, depth)
+            if (memo.has(key)) return memo.get(key)
 
             adaptiveNodes += 1
             if (adaptiveNodes > ADAPTIVE_NODE_CAP) {
               adaptiveCapped = true
-              return leafMetrics(solutionIndexes, dug)
+              return leafExpectedCost(solutionIndexes, dug)
             }
 
-            let best = leafMetrics(solutionIndexes, dug)
+            const totalWeight = stateWeight(solutionIndexes)
+            if (totalWeight <= 0) return 0
 
+            let bestCost = Infinity
             for (const action of pool) {
               if (dug.has(action)) continue
 
@@ -2114,52 +2156,42 @@ export function solveTreasures(
                 partitions.get(code).push(si)
               }
 
-              const totalWeight = stateWeight(solutionIndexes)
-              if (totalWeight <= 0) continue
-
               const nextDug = new Set(dug)
               nextDug.add(action)
-
-              let utility = 0
-              let foundFraction = 0
-              let completionProbability = 0
+              let expectedFuture = 0
 
               for (const branchSolutions of partitions.values()) {
                 const branchWeight = stateWeight(branchSolutions)
                 if (branchWeight <= 0) continue
                 const p = branchWeight / totalWeight
-                const result = evaluateState(
+                expectedFuture += p * evaluateCost(
                   branchSolutions,
                   nextDug,
                   depth - 1,
                 )
-                utility += p * result.utility
-                foundFraction += p * result.foundFraction
-                completionProbability += p * result.completionProbability
               }
 
-              if (
-                utility > best.utility + 1e-12 ||
-                (
-                  Math.abs(utility - best.utility) <= 1e-12 &&
-                  completionProbability > best.completionProbability
-                )
-              ) {
-                best = { utility, foundFraction, completionProbability }
-              }
+              const cost = 1 + expectedFuture
+              if (cost < bestCost) bestCost = cost
             }
 
-            return best
+            if (!Number.isFinite(bestCost)) {
+              bestCost = leafExpectedCost(solutionIndexes, dug)
+            }
+            memo.set(key, bestCost)
+            return bestCost
           }
 
           for (const candidate of smartDigRanking) {
             const firstIdx = candidate.index
+            candidate.adaptiveNext = true
+            candidate.adaptiveDepth = adaptiveDepth
+
             if (!pool.includes(firstIdx)) {
-              candidate.adaptiveScore = 0
-              candidate.expectedFoundFraction = candidate.targetHitProbability
+              candidate.expectedDigsToComplete = Infinity
+              candidate.expectedRemainingTargets = targetRemainingCount
               candidate.completionProbability = 0
-              candidate.adaptiveDepth = adaptiveDepth
-              candidate.adaptiveNext = true
+              candidate.lookaheadCapped = adaptiveCapped
               continue
             }
 
@@ -2171,43 +2203,43 @@ export function solveTreasures(
             }
 
             const dug = new Set([firstIdx])
-            let adaptiveScore = 0
-            let expectedFoundFraction = 0
+            let expectedFuture = 0
             let completionProbability = 0
+            let expectedRemainingTargets = 0
 
             for (const branchSolutions of partitions.values()) {
               const branchWeight = stateWeight(branchSolutions)
               if (branchWeight <= 0) continue
-              const result = evaluateState(
+              const p = branchWeight // global solution weights sum to 1
+
+              expectedFuture += p * evaluateCost(
                 branchSolutions,
                 dug,
                 adaptiveDepth - 1,
               )
-              adaptiveScore += branchWeight * result.utility
-              expectedFoundFraction += branchWeight * result.foundFraction
+
               completionProbability +=
-                branchWeight * result.completionProbability
+                p * completionProbabilityForState(branchSolutions, dug)
+              expectedRemainingTargets +=
+                p * expectedMissingTargets(branchSolutions, dug)
             }
 
-            candidate.adaptiveScore = adaptiveScore
-            candidate.expectedFoundFraction = expectedFoundFraction
-            candidate.expectedRemainingTargets = Math.max(
-              0,
-              targetRemainingCount * (1 - expectedFoundFraction),
-            )
+            candidate.expectedDigsToComplete = 1 + expectedFuture
+            candidate.expectedRemainingTargets = expectedRemainingTargets
             candidate.completionProbability = completionProbability
-            candidate.adaptiveDepth = adaptiveDepth
-            candidate.adaptiveNext = true
+            candidate.expectedFoundFraction = targetRemainingCount > 0
+              ? Math.max(
+                  0,
+                  1 - (expectedRemainingTargets / targetRemainingCount),
+                )
+              : 1
+            candidate.adaptiveScore = -candidate.expectedDigsToComplete
             candidate.lookaheadCapped = adaptiveCapped
-            // Backward-compatible field for UI/logs; now means probability of
-            // progress within the adaptive horizon rather than fixed 2 digs.
-            candidate.twoStepHitProbability = expectedFoundFraction
           }
 
           smartDigRanking.sort((a, b) =>
-            b.adaptiveScore - a.adaptiveScore ||
-            b.completionProbability - a.completionProbability ||
-            b.expectedFoundFraction - a.expectedFoundFraction ||
+            (a.expectedDigsToComplete ?? Infinity) -
+              (b.expectedDigsToComplete ?? Infinity) ||
             b.targetHitProbability - a.targetHitProbability ||
             b.targetInfoGain - a.targetInfoGain ||
             a.index - b.index
