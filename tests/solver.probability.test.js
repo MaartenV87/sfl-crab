@@ -212,13 +212,60 @@ describe('treasure probability enumeration', () => {
     expect(result.smartDig.targetInfoGain).toBeGreaterThan(0)
     expect(result.smartDig.targetHitProbability).toBeGreaterThan(0)
     expect(result.smartDig.adaptiveNext).toBe(true)
-    expect(result.smartDig.adaptiveDepth).toBe(2)
-    expect(result.smartDig.twoStepHitProbability).toBeGreaterThanOrEqual(
-      result.smartDig.targetHitProbability,
-    )
+    expect(result.smartDig.adaptiveDepth).toBeGreaterThanOrEqual(2)
+    expect(result.smartDig.expectedDigsToComplete).toBeGreaterThan(0)
+    expect(result.smartDig.probabilityBasis).toBe('unique-target-layouts-reduced')
+    expect(result.smartDig.openingTargetLayoutCount).toBeGreaterThan(0)
     expect(result.smartDig.expectedRemainingTargets).toBeGreaterThanOrEqual(0)
     expect(result.targetProbabilities.size).toBeGreaterThan(0)
   })
+
+  it('uses expected digs in the reduced last-target endgame', () => {
+    const tiles = emptyTiles(3)
+    tiles[1] = treasureTile('vase')
+
+    const result = solveTreasures(
+      tiles,
+      ['HIEROGLYPH'],
+      3,
+      {
+        includeProbabilities: true,
+        probabilityTarget: 'hieroglyph',
+        probabilitySolutionCap: 1,
+        probabilityNodeCap: 10000,
+      },
+    )
+
+    expect(result.probabilityMode).toBe('approximate')
+    expect(result.targetLayoutCount).toBe(2)
+    expect(result.smartDig.openingMode).toBe(true)
+    expect(result.smartDig.probabilityBasis).toBe('unique-target-layouts-reduced')
+    expect([3, 4]).toContain(result.smartDig.index)
+    expect(result.smartDig.targetHitProbability).toBeCloseTo(0.5)
+    expect(result.smartDig.expectedDigsToComplete).toBeCloseTo(1.5)
+  })
+
+  it('keeps direct target cells in the candidate set when information probes compete', () => {
+    const result = solveTreasures(
+      emptyTiles(4),
+      ['HIEROGLYPH'],
+      4,
+      {
+        includeProbabilities: true,
+        probabilityTarget: 'hieroglyph',
+        probabilitySolutionCap: 200,
+        probabilityNodeCap: 20000,
+      },
+    )
+
+    expect(result.probabilityMode).toBe('exact')
+    const bestDirect = Math.max(
+      ...result.smartDigRanking.map(item => item.targetHitProbability || 0),
+    )
+    expect(bestDirect).toBeGreaterThan(0)
+    expect(result.smartDig.expectedDigsToComplete).toBeGreaterThan(0)
+  })
+
 
   it('keeps approximate opening target percentages aligned with the opening model', () => {
     const result = solveTreasures(
