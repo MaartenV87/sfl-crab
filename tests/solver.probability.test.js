@@ -117,18 +117,46 @@ describe('treasure probability enumeration', () => {
     expect(result.smartDig.adaptiveDepth).toBeGreaterThanOrEqual(2)
     expect(result.smartDig.expectedFoundFraction).toBeGreaterThanOrEqual(0)
     expect(result.smartDig.expectedRemainingTargets).toBeGreaterThanOrEqual(0)
+    expect(result.smartDig.expectedDigsToComplete).toBeGreaterThan(0)
 
     for (let i = 1; i < result.smartDigRanking.length; i++) {
       const prev = result.smartDigRanking[i - 1]
       const next = result.smartDigRanking[i]
       expect(
-        prev.adaptiveScore > next.adaptiveScore ||
-        (
-          prev.adaptiveScore === next.adaptiveScore &&
-          prev.completionProbability >= next.completionProbability
-        )
+        (prev.expectedDigsToComplete ?? Infinity)
+          <= (next.expectedDigsToComplete ?? Infinity)
       ).toBe(true)
     }
+  })
+
+
+  it('prefers a 50/50 direct target over a pure information probe when it lowers expected digs', () => {
+    const tiles = emptyTiles(3)
+    // Vase at B1 leaves exactly two HIEROGLYPH placements:
+    // - Vases A1/B1, target A2
+    // - Vases B1/C1, target B2
+    // Digging A1/C1 identifies the layout but can never hit the target, so it
+    // takes 2 digs. Digging A2/B2 has a 50% direct hit and needs 1.5 digs on
+    // average. adaptive-next-v5 must choose the direct target strategy.
+    tiles[1] = treasureTile('vase')
+
+    const result = solveTreasures(
+      tiles,
+      ['HIEROGLYPH'],
+      3,
+      {
+        includeProbabilities: true,
+        probabilityTarget: 'hieroglyph',
+        probabilitySolutionCap: 100,
+        probabilityNodeCap: 10000,
+      },
+    )
+
+    expect(result.probabilityMode).toBe('exact')
+    expect(result.targetLayoutCount).toBe(2)
+    expect([3, 4]).toContain(result.smartDig.index)
+    expect(result.smartDig.targetHitProbability).toBeCloseTo(0.5)
+    expect(result.smartDig.expectedDigsToComplete).toBeCloseTo(1.5)
   })
 
 
