@@ -149,6 +149,53 @@ export function buildDigTextLog({
   }
   if (!locations.size) lines.push('-')
 
+  // Outcome KPIs focus on the real objective: how many digs were needed to
+  // finish the selected target, especially the expensive last-target phase.
+  const selectedTargetSlug = slugify(selectedTarget)
+  let selectedTargetRequired = 0
+  if (selectedTargetSlug) {
+    for (const key of patternKeys || []) {
+      for (const plot of DIGGING_FORMATIONS[key] || []) {
+        if (slugify(plot.name) === selectedTargetSlug) {
+          selectedTargetRequired += 1
+        }
+      }
+    }
+  }
+
+  const selectedTargetHits = []
+  if (selectedTargetSlug) {
+    for (const step of timeline) {
+      for (const tile of step.tiles || []) {
+        const result = resultForTile(tile)
+        if (result.slugs.includes(selectedTargetSlug)) {
+          selectedTargetHits.push(step.order)
+        }
+      }
+    }
+  }
+
+  if (selectedTargetSlug && selectedTargetRequired > 0) {
+    const first = selectedTargetHits[0] ?? null
+    const second = selectedTargetHits[1] ?? null
+    const completion = selectedTargetHits.length >= selectedTargetRequired
+      ? selectedTargetHits[selectedTargetRequired - 1]
+      : null
+    const nonTargetToComplete = completion == null
+      ? null
+      : timeline.filter(step => {
+          if (step.order > completion) return false
+          return !(step.tiles || []).some(tile =>
+            resultForTile(tile).slugs.includes(selectedTargetSlug)
+          )
+        }).length
+
+    lines.push(
+      '',
+      `TARGET_SEARCH_KPI: REQUIRED=${selectedTargetRequired} | FOUND=${Math.min(selectedTargetHits.length, selectedTargetRequired)} | DIGS_TO_FIRST=${first ?? '-'} | FIRST_TO_SECOND=${first != null && second != null ? second - first : '-'} | SECOND_TO_LAST=${second != null && completion != null ? completion - second : '-'} | COMPLETE_AT=${completion ?? '-'} | NON_TARGET_DIGS_TO_COMPLETE=${nonTargetToComplete ?? '-'}`,
+    )
+  }
+
   const moveByCell = new Map()
   for (const step of timeline) {
     for (const tile of step.tiles) {
@@ -234,7 +281,7 @@ export function buildDigTextLog({
 
         const info = snap.best.targetAware
           ? snap.best.openingMode
-            ? `OPENING=YES | TARGET_INFO_SPLIT=${Math.round((Number(snap.best.targetInfoGain) || 0) * 100)}% | TARGET_HIT_P=${Math.round((Number(snap.best.targetHitProbability) || 0) * 100)}% | WITHIN_2_P=${Math.round((Number(snap.best.twoStepHitProbability) || 0) * 100)}% | COMPANION_P=${Math.round((Number(snap.best.companionProbability) || 0) * 100)}% | TARGET_CONFIGS=${Number(snap.best.openingConfigurationCount) || 0}`
+            ? `OPENING=YES | TARGET_INFO_SPLIT=${Math.round((Number(snap.best.targetInfoGain) || 0) * 100)}% | TARGET_HIT_P=${Math.round((Number(snap.best.targetHitProbability) || 0) * 100)}% | CONFIG_HIT_P=${Math.round((Number(snap.best.configurationTargetHitProbability) || 0) * 100)}% | EXPECTED_DIGS_LEFT=${Number.isFinite(Number(snap.best.expectedDigsToComplete)) ? Number(snap.best.expectedDigsToComplete).toFixed(2) : '-'} | DEPTH=${Number(snap.best.adaptiveDepth) || 0} | TARGET_LAYOUTS=${Number(snap.best.openingTargetLayoutCount) || 0} | TARGET_CONFIGS=${Number(snap.best.openingConfigurationCount) || 0} | CAPPED=${snap.best.lookaheadCapped ? 'YES' : 'NO'}`
             : `TARGET_INFO_GAIN=${Math.round((Number(snap.best.targetInfoGain) || 0) * 100)}% | TARGET_HIT_P=${Math.round((Number(snap.best.targetHitProbability) || 0) * 100)}% | DEPTH=${Number(snap.best.adaptiveDepth) || 0} | EXPECTED_DIGS_LEFT=${Number.isFinite(Number(snap.best.expectedDigsToComplete)) ? Number(snap.best.expectedDigsToComplete).toFixed(2) : '-'} | EXPECTED_LEFT=${Number(snap.best.expectedRemainingTargets) || 0} | CAPPED=${snap.best.lookaheadCapped ? 'YES' : 'NO'}`
           : `EXPECTED_ELIMINATION=${Math.round((Number(snap.best.expectedElimination) || 0) * 100)}%`
 
@@ -249,6 +296,61 @@ export function buildDigTextLog({
             `P${step.step} ${indexLabel(Number(step.index), gridSize)} direct=${Math.round((Number(step.directProbability) || 0) * 100)}% cumulative=${Math.round((Number(step.cumulativeProbability) || 0) * 100)}%`
           ).join(' | ')
         )
+      }
+    }
+
+    // Compare predicted expected cost with the eventual observed completion
+    // only for stretches where NEXT was followed at every subsequent dig.
+    if (selectedTargetSlug && selectedTargetRequired > 0) {
+      const completionOrder = selectedTargetHits.length >= selectedTargetRequired
+        ? selectedTargetHits[selectedTargetRequired - 1]
+        : null
+      if (completionOrder != null) {
+        const sameTargetJournal = journal.filter(snap =>
+          slugify(snap.target) === selectedTargetSlug
+        )
+        let calibrationCount = 0
+        let calibrationAbsError = 0
+
+        for (const snap of sameTargetJournal) {
+          const after = Number(snap.afterDigOrder) || 0
+          const expected = Number(snap.best?.expectedDigsToComplete)
+          if (
+            !Number.isFinite(expected) ||
+            after >= completionOrder
+          ) continue
+
+          let followedAll = true
+          for (let order = after + 1; order <= completionOrder; order++) {
+            const state = sameTargetJournal.find(item =>
+              Number(item.afterDigOrder) === order - 1
+            )
+            const recommended = Number(state?.best?.index)
+            const actualStep = timeline.find(step => step.order === order)
+            const actualIndexes = new Set(
+              (actualStep?.tiles || []).map(tile =>
+                Number(tile.y) * gridSize + Number(tile.x)
+              ),
+            )
+            if (!Number.isFinite(recommended) || !actualIndexes.has(recommended)) {
+              followedAll = false
+              break
+            }
+          }
+
+          if (followedAll) {
+            calibrationCount += 1
+            calibrationAbsError += Math.abs(
+              expected - (completionOrder - after),
+            )
+          }
+        }
+
+        if (calibrationCount > 0) {
+          lines.push(
+            `EXPECTED_COST_CALIBRATION: FOLLOWED_STATES=${calibrationCount} | MAE=${(calibrationAbsError / calibrationCount).toFixed(2)} digs`,
+          )
+        }
       }
     }
 
