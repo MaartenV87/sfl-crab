@@ -1445,6 +1445,269 @@ export function solveTreasures(
           })
         }
 
+        if (deepTargetModel && openingLayoutCount > 0) {
+          // v6 reduced target planner. This is still labelled approximate
+          // because unrelated daily formations are not fully enumerated, but
+          // within the target-bearing formations it uses equal-weight target
+          // layouts and minimizes expected digs to completion.
+          const byIndex = new Map(ranking.map(item => [item.index, item]))
+          const allUnknown = []
+          for (let idx = 0; idx < gridSize * gridSize; idx++) {
+            if (!actuallyRevealedCells.has(idx)) allUnknown.push(idx)
+          }
+
+          const outcomeForRecord = (record, idx) => {
+            const name = record.cells.get(idx)
+            return name === undefined ? 'other' : `treasure:${slugify(name)}`
+          }
+
+          const weightedOutcomeStats = idx => {
+            const buckets = new Map()
+            let hit = 0
+            for (let ri = 0; ri < openingRecords.length; ri++) {
+              const weight = openingRecordWeights[ri] ?? 0
+              if (weight <= 0) continue
+              const outcome = outcomeForRecord(openingRecords[ri], idx)
+              buckets.set(outcome, (buckets.get(outcome) ?? 0) + weight)
+              if (
+                openingRecords[ri].targetCells.includes(idx)
+              ) hit += weight
+            }
+            let collision = 0
+            for (const p of buckets.values()) collision += p * p
+            return {
+              hit,
+              info: Math.max(0, 1 - collision),
+              buckets,
+            }
+          }
+
+          // Recompute direct probabilities and information on the SAME
+          // equal-layout prior. Also add pure information cells that were not
+          // explicit target-pattern treasure cells in the aggregate model.
+          for (const idx of allUnknown) {
+            const stats = weightedOutcomeStats(idx)
+            if (stats.hit > 0) openingTargetProbabilities.set(idx, stats.hit)
+            let item = byIndex.get(idx)
+            if (!item) {
+              item = {
+                index: idx,
+                targetAware: true,
+                openingMode: true,
+                adaptiveNext: true,
+                openingConfigurationCount: configurationCount,
+                companionProbability: 0,
+                outcomes: [],
+              }
+              ranking.push(item)
+              byIndex.set(idx, item)
+            }
+            item.probabilityBasis = 'unique-target-layouts-reduced'
+            item.openingTargetLayoutCount = openingLayoutCount
+            item.targetHitProbability = stats.hit
+            item.targetInfoGain = stats.info
+          }
+
+          const searchDepth =
+            openingLayoutCount > 1000 ? 2 :
+              openingLayoutCount > 250 ? 3 :
+                openingLayoutCount > 100 ? 4 :
+                  openingLayoutCount > 20 ? 6 : 10
+
+          // Keep direct targets and information probes in separate quotas so a
+          // high-probability list cannot crowd every companion probe out.
+          const directQuota =
+            openingLayoutCount <= 20 ? 20 :
+              openingLayoutCount <= 100 ? 12 : 10
+          const infoQuota =
+            openingLayoutCount <= 20 ? 12 :
+              openingLayoutCount <= 100 ? 8 : 6
+
+          const directCandidates = [...ranking]
+            .filter(item => item.targetHitProbability > 0)
+            .sort((a, b) =>
+              b.targetHitProbability - a.targetHitProbability ||
+              b.targetInfoGain - a.targetInfoGain ||
+              a.index - b.index
+            )
+            .slice(0, directQuota)
+
+          const infoCandidates = [...ranking]
+            .sort((a, b) =>
+              b.targetInfoGain - a.targetInfoGain ||
+              b.targetHitProbability - a.targetHitProbability ||
+              a.index - b.index
+            )
+            .slice(0, infoQuota)
+
+          const recursivePool = []
+          for (const item of [...directCandidates, ...infoCandidates]) {
+            if (!recursivePool.includes(item.index)) recursivePool.push(item.index)
+          }
+
+          const initialRecords = Array.from(
+            { length: openingRecords.length },
+            (_, i) => i,
+          )
+          const stateWeightOpening = indexes => {
+            let sum = 0
+            for (const ri of indexes) sum += openingRecordWeights[ri] ?? 0
+            return sum
+          }
+          const completeForOpeningRecord = (ri, dug) =>
+            openingRecords[ri].targetCells.every(idx => dug.has(idx))
+
+          const greedyRolloutCost = (recordIndexes, dug) => {
+            const totalWeight = stateWeightOpening(recordIndexes)
+            if (totalWeight <= 0) return 0
+
+            const marginal = new Map()
+            let allComplete = true
+            for (const ri of recordIndexes) {
+              const w = openingRecordWeights[ri] ?? 0
+              for (const idx of openingRecords[ri].targetCells) {
+                if (dug.has(idx)) continue
+                allComplete = false
+                marginal.set(idx, (marginal.get(idx) ?? 0) + w)
+              }
+            }
+            if (allComplete) return 0
+
+            const order = [...marginal.entries()]
+              .sort((a, b) => b[1] - a[1] || a[0] - b[0])
+              .map(([idx]) => idx)
+            const rank = new Map(order.map((idx, i) => [idx, i + 1]))
+
+            let expected = 0
+            for (const ri of recordIndexes) {
+              const normalized = (openingRecordWeights[ri] ?? 0) / totalWeight
+              let finishAt = 0
+              for (const idx of openingRecords[ri].targetCells) {
+                if (dug.has(idx)) continue
+                finishAt = Math.max(finishAt, rank.get(idx) ?? order.length)
+              }
+              expected += normalized * finishAt
+            }
+            return expected
+          }
+
+          let openingAdaptiveNodes = 0
+          const OPENING_ADAPTIVE_NODE_CAP =
+            openingLayoutCount <= 20 ? 100000 : 50000
+          let openingLookaheadCapped = false
+          const openingMemo = new Map()
+
+          const openingStateKey = (recordIndexes, dug, depth) =>
+            `${depth}|${recordIndexes.join(',')}|${[...dug].sort((a,b)=>a-b).join(',')}`
+
+          const openingExpectedCost = (recordIndexes, dug, depth) => {
+            const totalWeight = stateWeightOpening(recordIndexes)
+            if (totalWeight <= 0) return 0
+
+            let completeWeight = 0
+            for (const ri of recordIndexes) {
+              if (completeForOpeningRecord(ri, dug)) {
+                completeWeight += openingRecordWeights[ri] ?? 0
+              }
+            }
+            if (completeWeight >= totalWeight - 1e-12) return 0
+            if (depth <= 0) return greedyRolloutCost(recordIndexes, dug)
+
+            const key = openingStateKey(recordIndexes, dug, depth)
+            if (openingMemo.has(key)) return openingMemo.get(key)
+
+            openingAdaptiveNodes += 1
+            if (openingAdaptiveNodes > OPENING_ADAPTIVE_NODE_CAP) {
+              openingLookaheadCapped = true
+              return greedyRolloutCost(recordIndexes, dug)
+            }
+
+            let best = greedyRolloutCost(recordIndexes, dug)
+            for (const action of recursivePool) {
+              if (dug.has(action)) continue
+              const partitions = new Map()
+              for (const ri of recordIndexes) {
+                const outcome = outcomeForRecord(openingRecords[ri], action)
+                if (!partitions.has(outcome)) partitions.set(outcome, [])
+                partitions.get(outcome).push(ri)
+              }
+              const nextDug = new Set(dug)
+              nextDug.add(action)
+              let future = 0
+              for (const branch of partitions.values()) {
+                const p = stateWeightOpening(branch) / totalWeight
+                if (p <= 0) continue
+                future += p * openingExpectedCost(
+                  branch,
+                  nextDug,
+                  depth - 1,
+                )
+              }
+              best = Math.min(best, 1 + future)
+            }
+            openingMemo.set(key, best)
+            return best
+          }
+
+          // For the "last target" endgame, evaluate EVERY unknown first move.
+          // Subsequent recursion still uses the pruned balanced pool. This
+          // prevents a 0%-hit information probe from winning unless it really
+          // lowers expected completion cost.
+          const firstActions =
+            targetRemainingCount === 1 && openingLayoutCount <= 20
+              ? allUnknown
+              : [...new Set([...directCandidates, ...infoCandidates].map(x => x.index))]
+
+          for (const idx of firstActions) {
+            const item = byIndex.get(idx)
+            if (!item) continue
+
+            const partitions = new Map()
+            for (const ri of initialRecords) {
+              const outcome = outcomeForRecord(openingRecords[ri], idx)
+              if (!partitions.has(outcome)) partitions.set(outcome, [])
+              partitions.get(outcome).push(ri)
+            }
+
+            const dug = new Set([idx])
+            let future = 0
+            for (const branch of partitions.values()) {
+              const p = stateWeightOpening(branch)
+              if (p <= 0) continue
+              future += p * openingExpectedCost(
+                branch,
+                dug,
+                searchDepth - 1,
+              )
+            }
+
+            item.expectedDigsToComplete = 1 + future
+            item.adaptiveDepth = searchDepth
+            item.lookaheadCapped = openingLookaheadCapped
+            item.expectedRemainingTargets = Math.max(
+              0,
+              targetRemainingCount - item.targetHitProbability,
+            )
+            item.adaptiveScore = -item.expectedDigsToComplete
+          }
+
+          ranking.sort((a, b) =>
+            (a.expectedDigsToComplete ?? Infinity) -
+              (b.expectedDigsToComplete ?? Infinity) ||
+            b.targetHitProbability - a.targetHitProbability ||
+            b.targetInfoGain - a.targetInfoGain ||
+            a.index - b.index
+          )
+
+          return {
+            configurationCount,
+            targetLayoutCount: openingLayoutCount,
+            targetProbabilities: openingTargetProbabilities,
+            ranking,
+            best: ranking[0] ?? null,
+          }
+        }
+
         ranking.sort((a, b) => {
           // NEXT optimizes the chance of finding the selected target within
           // the next TWO adaptive digs. This automatically balances a direct
