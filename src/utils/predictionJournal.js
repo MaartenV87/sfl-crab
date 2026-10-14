@@ -1,7 +1,7 @@
 import { getTodayUTC } from '@/utils/buildDigTimeline.js'
 
 export const PREDICTION_JOURNAL_VERSION = 1
-export const PREDICTION_ALGORITHM_VERSION = 'adaptive-next-v5'
+export const PREDICTION_ALGORITHM_VERSION = 'adaptive-next-v6'
 
 function storageKey(landId, utcDate) {
   return `predictionJournal_${String(landId || '0')}_${utcDate || getTodayUTC()}`
@@ -43,12 +43,15 @@ function normalizeBest(best) {
     targetAware: Boolean(best.targetAware),
     targetInfoGain: Number(best.targetInfoGain) || 0,
     targetHitProbability: Number(best.targetHitProbability) || 0,
+    configurationTargetHitProbability:
+      Number(best.configurationTargetHitProbability) || 0,
     worstCaseTargetGain: Number(best.worstCaseTargetGain) || 0,
     expectedElimination: Number(best.expectedElimination) || 0,
     worstCaseElimination: Number(best.worstCaseElimination) || 0,
     openingMode: Boolean(best.openingMode),
     companionProbability: Number(best.companionProbability) || 0,
     openingConfigurationCount: Number(best.openingConfigurationCount) || 0,
+    openingTargetLayoutCount: Number(best.openingTargetLayoutCount) || 0,
     probabilityBasis: String(best.probabilityBasis || ''),
     adaptiveNext: Boolean(best.adaptiveNext),
     twoStepHitProbability: Number(best.twoStepHitProbability) || 0,
@@ -61,6 +64,15 @@ function normalizeBest(best) {
       : null,
     completionProbability: Number(best.completionProbability) || 0,
     lookaheadCapped: Boolean(best.lookaheadCapped),
+    bestDirectAlternativeIndex: Number.isFinite(Number(best.bestDirectAlternativeIndex))
+      ? Number(best.bestDirectAlternativeIndex)
+      : null,
+    bestDirectAlternativeProbability:
+      Number(best.bestDirectAlternativeProbability) || 0,
+    bestDirectAlternativeExpectedDigs:
+      Number.isFinite(Number(best.bestDirectAlternativeExpectedDigs))
+        ? Number(best.bestDirectAlternativeExpectedDigs)
+        : null,
   }
 }
 
