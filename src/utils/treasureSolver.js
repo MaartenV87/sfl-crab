@@ -2372,21 +2372,45 @@ export function solveTreasures(
             ) candidateIndexes.push(idx)
           }
 
-          // Always include the strongest direct target cells first.
+          // v6 keeps dedicated capacity for BOTH direct target cells and
+          // information probes. v5 could fill the whole pool with target cells
+          // before a strong companion/Crab/Sand probe was even considered.
+          const directQuota = Math.max(
+            1,
+            Math.ceil(adaptivePoolSize * 0.65),
+          )
+          const infoQuota = Math.max(1, adaptivePoolSize - directQuota)
+
           ;[...targetProbabilities.entries()]
             .sort((a, b) => b[1] - a[1] || a[0] - b[0])
-            .slice(0, adaptivePoolSize)
+            .slice(0, directQuota)
             .forEach(([idx]) => addCandidate(idx))
 
-          // Then include informative probes (Crab/Sand/companions can be useful).
           ;[...smartDigRanking]
             .sort((a, b) =>
               b.targetInfoGain - a.targetInfoGain ||
               b.targetHitProbability - a.targetHitProbability ||
               a.index - b.index
             )
-            .slice(0, adaptivePoolSize)
+            .slice(0, infoQuota)
             .forEach(item => addCandidate(item.index))
+
+          // If direct/info lists overlap, fill the spare slots with the next
+          // best candidates from either list.
+          ;[
+            ...[...targetProbabilities.entries()]
+              .sort((a, b) => b[1] - a[1] || a[0] - b[0])
+              .map(([idx]) => idx),
+            ...[...smartDigRanking]
+              .sort((a, b) =>
+                b.targetInfoGain - a.targetInfoGain ||
+                b.targetHitProbability - a.targetHitProbability ||
+                a.index - b.index
+              )
+              .map(item => item.index),
+          ].forEach(idx => {
+            if (candidateIndexes.length < adaptivePoolSize) addCandidate(idx)
+          })
 
           const pool = candidateIndexes.slice(0, adaptivePoolSize)
           const initialSolutions = Array.from(
@@ -2438,24 +2462,43 @@ export function solveTreasures(
             return expected
           }
 
-          // Admissible-ish practical leaf estimate: every still-missing target
-          // needs at least one dig. Add a small ambiguity penalty because when
-          // layouts still disagree, some misses/probes are normally required.
+          // v6 leaf value = a concrete greedy rollout, not an arbitrary
+          // ambiguity penalty. Order remaining target cells by posterior
+          // marginal probability, then measure when each compatible solution
+          // would be completed under that fixed policy. This is a real
+          // achievable continuation cost and therefore a useful upper bound.
           const leafExpectedCost = (solutionIndexes, dug) => {
-            const missing = expectedMissingTargets(solutionIndexes, dug)
-            if (missing <= 1e-12) return 0
+            const totalWeight = stateWeight(solutionIndexes)
+            if (totalWeight <= 0) return 0
 
-            const signatures = new Set()
+            const marginal = new Map()
+            let anyMissing = false
             for (const si of solutionIndexes) {
-              const remaining = (targetSolutionCells[si] || [])
-                .filter(idx => !dug.has(idx))
-                .join(',')
-              signatures.add(remaining)
+              const w = solutionWeights[si] ?? 0
+              for (const idx of targetSolutionCells[si] || []) {
+                if (dug.has(idx)) continue
+                anyMissing = true
+                marginal.set(idx, (marginal.get(idx) ?? 0) + w)
+              }
             }
-            const ambiguityPenalty = signatures.size > 1
-              ? Math.min(1.5, Math.log2(signatures.size) * 0.15)
-              : 0
-            return missing + ambiguityPenalty
+            if (!anyMissing) return 0
+
+            const order = [...marginal.entries()]
+              .sort((a, b) => b[1] - a[1] || a[0] - b[0])
+              .map(([idx]) => idx)
+            const rank = new Map(order.map((idx, i) => [idx, i + 1]))
+
+            let expected = 0
+            for (const si of solutionIndexes) {
+              const normalized = (solutionWeights[si] ?? 0) / totalWeight
+              let finishAt = 0
+              for (const idx of targetSolutionCells[si] || []) {
+                if (dug.has(idx)) continue
+                finishAt = Math.max(finishAt, rank.get(idx) ?? order.length)
+              }
+              expected += normalized * finishAt
+            }
+            return expected
           }
 
           const keyForState = (solutionIndexes, dug, depth) =>
@@ -2517,12 +2560,21 @@ export function solveTreasures(
             return bestCost
           }
 
+          const exactFirstActionSet =
+            targetRemainingCount === 1 && layoutCount <= 20
+              ? new Set(
+                  smartDigRanking
+                    .filter(item => !actuallyRevealedCells.has(item.index))
+                    .map(item => item.index),
+                )
+              : new Set(pool)
+
           for (const candidate of smartDigRanking) {
             const firstIdx = candidate.index
             candidate.adaptiveNext = true
             candidate.adaptiveDepth = adaptiveDepth
 
-            if (!pool.includes(firstIdx)) {
+            if (!exactFirstActionSet.has(firstIdx)) {
               candidate.expectedDigsToComplete = Infinity
               candidate.expectedRemainingTargets = targetRemainingCount
               candidate.completionProbability = 0
@@ -2638,6 +2690,7 @@ export function solveTreasures(
 
         if (openingModel) {
           targetProbabilities = openingModel.targetProbabilities
+          targetLayoutCount = openingModel.targetLayoutCount ?? 0
           smartDigRanking = openingModel.ranking
           smartDig = openingModel.best
         } else if (normalizedProbabilityTarget) {
