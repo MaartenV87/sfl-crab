@@ -235,7 +235,7 @@ export function buildDigTextLog({
         const info = snap.best.targetAware
           ? snap.best.openingMode
             ? `OPENING=YES | TARGET_INFO_SPLIT=${Math.round((Number(snap.best.targetInfoGain) || 0) * 100)}% | TARGET_HIT_P=${Math.round((Number(snap.best.targetHitProbability) || 0) * 100)}% | WITHIN_2_P=${Math.round((Number(snap.best.twoStepHitProbability) || 0) * 100)}% | COMPANION_P=${Math.round((Number(snap.best.companionProbability) || 0) * 100)}% | TARGET_CONFIGS=${Number(snap.best.openingConfigurationCount) || 0}`
-            : `TARGET_INFO_GAIN=${Math.round((Number(snap.best.targetInfoGain) || 0) * 100)}% | TARGET_HIT_P=${Math.round((Number(snap.best.targetHitProbability) || 0) * 100)}% | DEPTH=${Number(snap.best.adaptiveDepth) || 0} | EXPECTED_FOUND=${Math.round((Number(snap.best.expectedFoundFraction) || 0) * 100)}% | COMPLETION_P=${Math.round((Number(snap.best.completionProbability) || 0) * 100)}% | EXPECTED_LEFT=${Number(snap.best.expectedRemainingTargets) || 0}`
+            : `TARGET_INFO_GAIN=${Math.round((Number(snap.best.targetInfoGain) || 0) * 100)}% | TARGET_HIT_P=${Math.round((Number(snap.best.targetHitProbability) || 0) * 100)}% | DEPTH=${Number(snap.best.adaptiveDepth) || 0} | EXPECTED_DIGS_LEFT=${Number.isFinite(Number(snap.best.expectedDigsToComplete)) ? Number(snap.best.expectedDigsToComplete).toFixed(2) : '-'} | EXPECTED_LEFT=${Number(snap.best.expectedRemainingTargets) || 0} | CAPPED=${snap.best.lookaheadCapped ? 'YES' : 'NO'}`
           : `EXPECTED_ELIMINATION=${Math.round((Number(snap.best.expectedElimination) || 0) * 100)}%`
 
         lines.push(
