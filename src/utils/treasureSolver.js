@@ -1429,6 +1429,10 @@ export function solveTreasures(
             openingConfigurationCount: configurationCount,
             targetInfoGain,
             targetHitProbability,
+            configurationTargetHitProbability:
+              counts.get(normalizedProbabilityTarget)
+                ? (counts.get(normalizedProbabilityTarget) / configurationCount)
+                : 0,
             twoStepHitProbability,
             adaptiveDepth: 2,
             expectedFoundFraction:
@@ -1698,6 +1702,24 @@ export function solveTreasures(
             b.targetInfoGain - a.targetInfoGain ||
             a.index - b.index
           )
+
+          const bestDirectOpening = [...ranking]
+            .filter(item => item.targetHitProbability > 0)
+            .sort((a, b) =>
+              b.targetHitProbability - a.targetHitProbability ||
+              (a.expectedDigsToComplete ?? Infinity) -
+                (b.expectedDigsToComplete ?? Infinity) ||
+              a.index - b.index
+            )[0] ?? null
+          if (ranking[0] && bestDirectOpening) {
+            ranking[0].bestDirectAlternativeIndex = bestDirectOpening.index
+            ranking[0].bestDirectAlternativeProbability =
+              bestDirectOpening.targetHitProbability
+            ranking[0].bestDirectAlternativeExpectedDigs =
+              Number.isFinite(bestDirectOpening.expectedDigsToComplete)
+                ? bestDirectOpening.expectedDigsToComplete
+                : null
+          }
 
           return {
             configurationCount,
@@ -2631,6 +2653,24 @@ export function solveTreasures(
             b.targetInfoGain - a.targetInfoGain ||
             a.index - b.index
           )
+
+          const bestDirectExact = [...smartDigRanking]
+            .filter(item => item.targetHitProbability > 0)
+            .sort((a, b) =>
+              b.targetHitProbability - a.targetHitProbability ||
+              (a.expectedDigsToComplete ?? Infinity) -
+                (b.expectedDigsToComplete ?? Infinity) ||
+              a.index - b.index
+            )[0] ?? null
+          if (smartDigRanking[0] && bestDirectExact) {
+            smartDigRanking[0].bestDirectAlternativeIndex = bestDirectExact.index
+            smartDigRanking[0].bestDirectAlternativeProbability =
+              bestDirectExact.targetHitProbability
+            smartDigRanking[0].bestDirectAlternativeExpectedDigs =
+              Number.isFinite(bestDirectExact.expectedDigsToComplete)
+                ? bestDirectExact.expectedDigsToComplete
+                : null
+          }
         } else {
           // If no target is selected (or its location is already fully known),
           // fall back to generic whole-board information gain.
