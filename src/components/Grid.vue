@@ -123,7 +123,18 @@
         </template>
       </div>
       <div class="text-[0.62rem] opacity-65 mt-0.5">
-        Follow NEXT first. Exact mode minimizes expected digs until all remaining selected targets are found.
+        Follow NEXT first. When enough target layouts are known, NEXT minimizes expected digs until all remaining selected targets are found.
+        <template
+          v-if="Number.isFinite(smartDig.bestDirectAlternativeIndex) &&
+            smartDig.bestDirectAlternativeIndex !== smartDig.index"
+        >
+          Best direct alternative:
+          {{ cellLabel(smartDig.bestDirectAlternativeIndex) }}
+          ({{ Math.round((smartDig.bestDirectAlternativeProbability ?? 0) * 100) }}%
+          <template v-if="Number.isFinite(smartDig.bestDirectAlternativeExpectedDigs)">
+            · ~{{ smartDig.bestDirectAlternativeExpectedDigs.toFixed(2) }} digs
+          </template>).
+        </template>
       </div>
     </div>
 
@@ -389,6 +400,9 @@ const smartDigTitle = computed(() => {
     const companion = Math.round((smartDig.value.companionProbability ?? 0) * 100)
     const label = probabilityTarget.replace(/_/g, ' ')
     if (smartDig.value.openingMode) {
+      if (expectedDigs !== null) {
+        return `NEXT for ${label}: ${col}${row} — ${hit}% direct hit; ~${expectedDigs} expected digs to finish; reduced target-layout model; depth ${depth}`
+      }
       return `NEXT for ${label}: ${col}${row} — ${hit}% direct hit, ~${progress}% adaptive target progress; ${companion}% companion chance; ${info}% information split`
     }
     return `NEXT for ${label}: ${col}${row} — ${hit}% direct hit${expectedDigs !== null ? `; ~${expectedDigs} expected digs to finish` : ''}; search depth ${depth}`
