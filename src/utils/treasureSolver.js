@@ -1165,7 +1165,7 @@ export function solveTreasures(
         // memory cost.
         const openingRecords = []
         let openingRecordsComplete = true
-        const OPENING_DEEP_CONFIG_CAP = 5000
+        const OPENING_DEEP_CONFIG_CAP = 12000
         let configurationCount = 0
         let openingNodes = 0
         let openingAborted = false
@@ -1305,15 +1305,15 @@ export function solveTreasures(
 
         // v7 target-centric feasibility filter.
         //
-        // The reduced model can enumerate only target-bearing formations very
-        // cheaply, but many such target layouts cannot coexist with the OTHER
-        // daily formations. Before expected-cost planning, ask only the much
-        // cheaper existential question: "does at least one completion of the
-        // unrelated formations exist?" We stop at the first completion and
-        // never enumerate every full board.
+        // The target-only model is cheap, but it can keep target layouts that
+        // cannot coexist with the unrelated daily formations. Group records by
+        // remaining-target signature and ask an existential question for each
+        // layout: does ANY compatible companion configuration have at least one
+        // full-board completion? One witness is enough to keep the layout.
         //
-        // If the feasibility budget is exhausted, the record is retained
-        // (unknown != impossible), preserving conservative behaviour.
+        // This is intentionally NOT full enumeration. If the shared feasibility
+        // budget is exhausted, unproven layouts are retained (unknown !=
+        // impossible), so pruning stays conservative.
         let targetFeasibilityChecked = 0
         let targetFeasibilityRejected = 0
         let targetFeasibilityCapped = false
@@ -1338,21 +1338,27 @@ export function solveTreasures(
 
           let feasibilityNodes = 0
           const FEASIBILITY_NODE_CAP =
-            openingRecords.length <= 500 ? 300000 : 120000
+            openingRecords.length <= 500 ? 350000 :
+              openingRecords.length <= 3000 ? 220000 : 140000
 
           const recordHasCompletion = record => {
-            const occupiedFeasible = new Set(fixedProbabilityCells)
-            for (const idx of record.allCells.keys()) occupiedFeasible.add(idx)
+            const occupiedFeasible = new Set()
+            const feasibleNames = new Map()
 
-            const revealCovered = (idx, name) => {
-              if (!occupiedFeasible.has(idx)) return false
-              if (record.allCells.has(idx)) {
-                return namesMatch(record.allCells.get(idx), name)
+            for (const plots of confirmedPlacements) {
+              for (const [idx, name] of plots) {
+                occupiedFeasible.add(idx)
+                feasibleNames.set(idx, name)
               }
-              // Any fixed confirmed placement covering this cell was already
-              // validated by the main solver.
-              return fixedProbabilityCells.has(idx)
             }
+            for (const [idx, name] of record.allCells) {
+              occupiedFeasible.add(idx)
+              feasibleNames.set(idx, name)
+            }
+
+            const revealCovered = (idx, name) =>
+              feasibleNames.has(idx) &&
+              namesMatch(feasibleNames.get(idx), name)
 
             const allRevealsCoveredFeasible = () =>
               revealedEntries.every(([idx, name]) => revealCovered(idx, name))
@@ -1438,9 +1444,16 @@ export function solveTreasures(
                 const plots = group.placements[pi]
                 const keys = [...plots.keys()]
                 if (keys.some(idx => occupiedFeasible.has(idx))) continue
-                for (const idx of keys) occupiedFeasible.add(idx)
+
+                for (const [idx, name] of plots) {
+                  occupiedFeasible.add(idx)
+                  feasibleNames.set(idx, name)
+                }
                 search(groupIndex, pi + 1, left - 1)
-                for (const idx of keys) occupiedFeasible.delete(idx)
+                for (const idx of keys) {
+                  occupiedFeasible.delete(idx)
+                  feasibleNames.delete(idx)
+                }
               }
             }
 
@@ -1453,23 +1466,48 @@ export function solveTreasures(
             return capped ? null : found
           }
 
-          const feasibleRecords = []
+          const recordsByTargetSignature = new Map()
           for (const record of openingRecords) {
-            if (targetFeasibilityCapped) {
-              feasibleRecords.push(record)
-              continue
+            const signature = record.targetCells.join(',')
+            if (!recordsByTargetSignature.has(signature)) {
+              recordsByTargetSignature.set(signature, [])
             }
-            const feasible = recordHasCompletion(record)
-            if (feasible === null) {
-              feasibleRecords.push(record)
-              continue
-            }
-            targetFeasibilityChecked += 1
-            if (feasible) feasibleRecords.push(record)
-            else targetFeasibilityRejected += 1
+            recordsByTargetSignature.get(signature).push(record)
           }
 
-          if (feasibleRecords.length > 0) {
+          const keptSignatures = new Set()
+          for (const [signature, records] of recordsByTargetSignature) {
+            if (targetFeasibilityCapped) {
+              keptSignatures.add(signature)
+              continue
+            }
+
+            let layoutFeasible = false
+            let layoutUnknown = false
+            for (const record of records) {
+              const result = recordHasCompletion(record)
+              if (result === null) {
+                layoutUnknown = true
+                break
+              }
+              if (result) {
+                layoutFeasible = true
+                break
+              }
+            }
+
+            if (layoutFeasible || layoutUnknown) {
+              keptSignatures.add(signature)
+            } else {
+              targetFeasibilityRejected += 1
+            }
+            targetFeasibilityChecked += 1
+          }
+
+          if (keptSignatures.size > 0) {
+            const feasibleRecords = openingRecords.filter(record =>
+              keptSignatures.has(record.targetCells.join(','))
+            )
             openingRecords.length = 0
             openingRecords.push(...feasibleRecords)
             configurationCount = feasibleRecords.length
