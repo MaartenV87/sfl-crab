@@ -140,7 +140,7 @@ describe('treasure probability enumeration', () => {
     // - Vases B1/C1, target B2
     // Digging A1/C1 identifies the layout but can never hit the target, so it
     // takes 2 digs. Digging A2/B2 has a 50% direct hit and needs 1.5 digs on
-    // average. adaptive-next-v5 must choose the direct target strategy.
+    // average. the expected-cost policy must choose the direct target strategy.
     tiles[1] = treasureTile('vase')
 
     const result = solveTreasures(
@@ -226,6 +226,33 @@ describe('treasure probability enumeration', () => {
     expect(result.smartDig.targetFeasibilityRejected).toBeGreaterThanOrEqual(0)
     expect(result.smartDig.expectedRemainingTargets).toBeGreaterThanOrEqual(0)
     expect(result.targetProbabilities.size).toBeGreaterThan(0)
+  })
+
+  it('does not require an information move to win on a marginal approximate cost estimate', () => {
+    const tiles = emptyTiles(3)
+    tiles[1] = treasureTile('vase')
+
+    const result = solveTreasures(
+      tiles,
+      ['HIEROGLYPH'],
+      3,
+      {
+        includeProbabilities: true,
+        probabilityTarget: 'hieroglyph',
+        probabilitySolutionCap: 1,
+        probabilityNodeCap: 10000,
+      },
+    )
+
+    expect(result.probabilityMode).toBe('approximate')
+    expect(result.smartDig.targetHitProbability).toBeGreaterThan(0)
+    expect(result.smartDig.expectedDigsToComplete).toBeGreaterThan(0)
+    if (result.smartDig.robustFallbackUsed) {
+      expect(result.smartDig.robustCostMargin).toBeGreaterThan(0)
+      expect(result.smartDig.modelPreferredIndex).not.toBeNull()
+      expect(result.smartDig.robustCostAdvantage)
+        .toBeLessThan(result.smartDig.robustCostMargin)
+    }
   })
 
   it('uses expected digs in the reduced last-target endgame', () => {

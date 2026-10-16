@@ -291,11 +291,30 @@ export function buildDigTextLog({
             : `TARGET_INFO_GAIN=${Math.round((Number(snap.best.targetInfoGain) || 0) * 100)}% | TARGET_HIT_P=${Math.round((Number(snap.best.targetHitProbability) || 0) * 100)}% | DEPTH=${snap.best.endgameOptimal ? 'OPTIMAL' : (Number(snap.best.adaptiveDepth) || 0)} | EXPECTED_DIGS_LEFT=${expectedDigsText} | EXPECTED_LEFT=${Number(snap.best.expectedRemainingTargets) || 0} | ENDGAME_OPTIMAL=${snap.best.endgameOptimal ? 'YES' : 'NO'} | ENDGAME_STATES=${Number(snap.best.endgameStateCount) || 0} | CAPPED=${snap.best.lookaheadCapped ? 'YES' : 'NO'}`
           : `EXPECTED_ELIMINATION=${Math.round((Number(snap.best.expectedElimination) || 0) * 100)}%`
 
+        const robustInfo = snap.best.robustFallbackUsed
+          ? ` | ROBUST_FALLBACK=YES | ROBUST_REASON=${snap.best.robustReason || '-'} | MODEL_ADVANTAGE=${Number(snap.best.robustCostAdvantage || 0).toFixed(2)} | REQUIRED_MARGIN=${Number(snap.best.robustCostMargin || 0).toFixed(2)}`
+          : ''
         lines.push(
-          `  NEXT: ${indexLabel(idx, gridSize)} | ${info} | FOLLOWED_NEXT=${followed ? 'YES' : 'NO'} | VERDICT=${verdict}${observed && observed.order > after ? ` | DUG_AT=#${observed.order} | ACTUAL=${observed.text}` : ''}`,
+          `  NEXT: ${indexLabel(idx, gridSize)} | ${info}${robustInfo} | FOLLOWED_NEXT=${followed ? 'YES' : 'NO'} | VERDICT=${verdict}${observed && observed.order > after ? ` | DUG_AT=#${observed.order} | ACTUAL=${observed.text}` : ''}`,
         )
 
         if (
+          snap.best.robustFallbackUsed &&
+          snap.best.modelPreferredIndex != null &&
+          Number.isFinite(Number(snap.best.modelPreferredIndex))
+        ) {
+          const modelCost =
+            snap.best.modelPreferredExpectedDigs != null &&
+            Number.isFinite(Number(snap.best.modelPreferredExpectedDigs))
+              ? Number(snap.best.modelPreferredExpectedDigs).toFixed(2)
+              : '-'
+          lines.push(
+            `  MODEL_PICK: ${indexLabel(Number(snap.best.modelPreferredIndex), gridSize)} | TARGET_HIT_P=${Math.round((Number(snap.best.modelPreferredProbability) || 0) * 100)}% | EXPECTED_DIGS_LEFT=${modelCost}`,
+          )
+        }
+
+        if (
+          snap.best.bestDirectAlternativeIndex != null &&
           Number.isFinite(Number(snap.best.bestDirectAlternativeIndex)) &&
           Number(snap.best.bestDirectAlternativeIndex) !== idx
         ) {

@@ -1,7 +1,7 @@
 import { getTodayUTC } from '@/utils/buildDigTimeline.js'
 
 export const PREDICTION_JOURNAL_VERSION = 1
-export const PREDICTION_ALGORITHM_VERSION = 'adaptive-next-v7'
+export const PREDICTION_ALGORITHM_VERSION = 'adaptive-next-v8'
 
 function storageKey(landId, utcDate) {
   return `predictionJournal_${String(landId || '0')}_${utcDate || getTodayUTC()}`
@@ -66,9 +66,11 @@ function normalizeBest(best) {
         : null,
     completionProbability: Number(best.completionProbability) || 0,
     lookaheadCapped: Boolean(best.lookaheadCapped),
-    bestDirectAlternativeIndex: Number.isFinite(Number(best.bestDirectAlternativeIndex))
-      ? Number(best.bestDirectAlternativeIndex)
-      : null,
+    bestDirectAlternativeIndex:
+      best.bestDirectAlternativeIndex != null &&
+      Number.isFinite(Number(best.bestDirectAlternativeIndex))
+        ? Number(best.bestDirectAlternativeIndex)
+        : null,
     bestDirectAlternativeProbability:
       Number(best.bestDirectAlternativeProbability) || 0,
     bestDirectAlternativeExpectedDigs:
@@ -81,6 +83,21 @@ function normalizeBest(best) {
     targetFeasibilityCapped: Boolean(best.targetFeasibilityCapped),
     endgameOptimal: Boolean(best.endgameOptimal),
     endgameStateCount: Number(best.endgameStateCount) || 0,
+    robustFallbackUsed: Boolean(best.robustFallbackUsed),
+    robustReason: String(best.robustReason || ''),
+    robustCostMargin: Number(best.robustCostMargin) || 0,
+    robustCostAdvantage: Number(best.robustCostAdvantage) || 0,
+    modelPreferredIndex:
+      best.modelPreferredIndex != null &&
+      Number.isFinite(Number(best.modelPreferredIndex))
+        ? Number(best.modelPreferredIndex)
+        : null,
+    modelPreferredProbability: Number(best.modelPreferredProbability) || 0,
+    modelPreferredExpectedDigs:
+      best.modelPreferredExpectedDigs != null &&
+      Number.isFinite(Number(best.modelPreferredExpectedDigs))
+        ? Number(best.modelPreferredExpectedDigs)
+        : null,
   }
 }
 

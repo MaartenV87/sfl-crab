@@ -124,11 +124,15 @@
       </div>
       <div class="text-[0.62rem] opacity-65 mt-0.5">
         Follow NEXT first. When enough target layouts are known, NEXT minimizes expected digs until all remaining selected targets are found.
+        <template v-if="smartDig.robustFallbackUsed">
+          A robustness guard preferred the stronger direct target because the modelled information advantage was too small to trust.
+        </template>
         <template v-if="smartDig.endgameOptimal">
           This endgame is solved to completion, not horizon-estimated.
         </template>
         <template
-          v-if="Number.isFinite(smartDig.bestDirectAlternativeIndex) &&
+          v-if="smartDig.bestDirectAlternativeIndex != null &&
+            Number.isFinite(smartDig.bestDirectAlternativeIndex) &&
             smartDig.bestDirectAlternativeIndex !== smartDig.index"
         >
           Best direct alternative:

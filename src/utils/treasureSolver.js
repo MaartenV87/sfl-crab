@@ -1957,6 +1957,52 @@ export function solveTreasures(
                 (b.expectedDigsToComplete ?? Infinity) ||
               a.index - b.index
             )[0] ?? null
+
+          // v8 robustness guard: expected-cost differences in the reduced
+          // model are estimates, not proof. Do not give up a much stronger
+          // direct hit for a tiny modelled gain. The noisier the state, the
+          // larger the gain an information probe must prove before it wins.
+          const approximateCostMargin =
+            targetFeasibilityCapped || openingLookaheadCapped ? 1.00 :
+              openingLayoutCount > 1000 ? 0.75 :
+                openingLayoutCount > 250 ? 0.65 :
+                  openingLayoutCount > 100 ? 0.50 :
+                    openingLayoutCount > 20 ? 0.35 : 0.15
+
+          const modelPreferredOpening = ranking[0] ?? null
+          if (
+            modelPreferredOpening &&
+            bestDirectOpening &&
+            modelPreferredOpening.index !== bestDirectOpening.index &&
+            Number.isFinite(modelPreferredOpening.expectedDigsToComplete) &&
+            Number.isFinite(bestDirectOpening.expectedDigsToComplete)
+          ) {
+            const modelAdvantage =
+              bestDirectOpening.expectedDigsToComplete -
+              modelPreferredOpening.expectedDigsToComplete
+
+            modelPreferredOpening.robustCostMargin = approximateCostMargin
+            modelPreferredOpening.robustCostAdvantage = modelAdvantage
+
+            if (modelAdvantage < approximateCostMargin - 1e-12) {
+              bestDirectOpening.robustFallbackUsed = true
+              bestDirectOpening.robustReason = 'approximate-cost-margin'
+              bestDirectOpening.robustCostMargin = approximateCostMargin
+              bestDirectOpening.robustCostAdvantage = modelAdvantage
+              bestDirectOpening.modelPreferredIndex = modelPreferredOpening.index
+              bestDirectOpening.modelPreferredProbability =
+                modelPreferredOpening.targetHitProbability
+              bestDirectOpening.modelPreferredExpectedDigs =
+                modelPreferredOpening.expectedDigsToComplete
+
+              const directPosition = ranking.indexOf(bestDirectOpening)
+              if (directPosition > 0) {
+                ranking.splice(directPosition, 1)
+                ranking.unshift(bestDirectOpening)
+              }
+            }
+          }
+
           if (ranking[0] && bestDirectOpening) {
             ranking[0].bestDirectAlternativeIndex = bestDirectOpening.index
             ranking[0].bestDirectAlternativeProbability =
@@ -2917,10 +2963,13 @@ export function solveTreasures(
           // and actions that induce the same posterior partition are evaluated
           // only once per state. This makes the 4-layout style endgames from
           // real logs tiny and gives a proof-quality expected dig count.
+          const optimalSolutionCap =
+            layoutCount <= 4 ? 2500 :
+              layoutCount <= 8 ? 1200 : 750
           const useOptimalEndgame =
             targetRemainingCount === 1 &&
             layoutCount <= 12 &&
-            globalSolutionCount <= 750
+            globalSolutionCount <= optimalSolutionCap
 
           if (useOptimalEndgame) {
             const targetOutcomeCode =
@@ -3083,6 +3132,47 @@ export function solveTreasures(
                 (b.expectedDigsToComplete ?? Infinity) ||
               a.index - b.index
             )[0] ?? null
+
+          // Exact-but-capped horizon search is much more trustworthy than the
+          // reduced model, but still not proof-quality. Require a small margin
+          // before sacrificing a stronger direct hit. Fully optimal endgames
+          // never use this guard.
+          const exactPreferred = smartDigRanking[0] ?? null
+          if (
+            exactPreferred &&
+            bestDirectExact &&
+            !exactPreferred.endgameOptimal &&
+            exactPreferred.lookaheadCapped &&
+            exactPreferred.index !== bestDirectExact.index &&
+            Number.isFinite(exactPreferred.expectedDigsToComplete) &&
+            Number.isFinite(bestDirectExact.expectedDigsToComplete)
+          ) {
+            const exactMargin = 0.20
+            const modelAdvantage =
+              bestDirectExact.expectedDigsToComplete -
+              exactPreferred.expectedDigsToComplete
+            exactPreferred.robustCostMargin = exactMargin
+            exactPreferred.robustCostAdvantage = modelAdvantage
+
+            if (modelAdvantage < exactMargin - 1e-12) {
+              bestDirectExact.robustFallbackUsed = true
+              bestDirectExact.robustReason = 'capped-exact-cost-margin'
+              bestDirectExact.robustCostMargin = exactMargin
+              bestDirectExact.robustCostAdvantage = modelAdvantage
+              bestDirectExact.modelPreferredIndex = exactPreferred.index
+              bestDirectExact.modelPreferredProbability =
+                exactPreferred.targetHitProbability
+              bestDirectExact.modelPreferredExpectedDigs =
+                exactPreferred.expectedDigsToComplete
+
+              const directPosition = smartDigRanking.indexOf(bestDirectExact)
+              if (directPosition > 0) {
+                smartDigRanking.splice(directPosition, 1)
+                smartDigRanking.unshift(bestDirectExact)
+              }
+            }
+          }
+
           if (smartDigRanking[0] && bestDirectExact) {
             smartDigRanking[0].bestDirectAlternativeIndex = bestDirectExact.index
             smartDigRanking[0].bestDirectAlternativeProbability =
