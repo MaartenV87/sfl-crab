@@ -4,7 +4,7 @@
 // locations off the main thread via requestIdleCallback (with a setTimeout
 // fallback), so a heavy solve never blocks the UI.
 
-import { ref, watch } from 'vue'
+import { ref, watch, onUnmounted } from 'vue'
 import { solveTreasures } from '@/utils/treasureSolver.js'
 
 export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { gridSize = 10, syncRef = null, probabilityRef = null, probabilityTargetRef = null, performanceProfileRef = null } = {}) {
@@ -38,6 +38,12 @@ export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { grid
     : clearTimeout
 
   let idleId = null
+  let worker = null
+  let solveId = 0
+
+  function applyResult(result) {
+    applyResult(result)
+  }
 
   function runSolve() {
     const result = solveTreasures(
@@ -110,6 +116,50 @@ export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { grid
 
     idleId = schedule(() => {
       idleId = null
+
+      // Heavy prediction work must not run on the browser main thread.
+      // Terminating the previous worker also gives us a real cancellation
+      // mechanism when a new dig arrives before the previous solve finished.
+      if (typeof Worker !== 'undefined') {
+        if (worker) {
+          worker.terminate()
+          worker = null
+        }
+
+        const id = ++solveId
+        worker = new Worker(
+          new URL('../workers/predictionSolver.worker.js', import.meta.url),
+          { type: 'module' },
+        )
+
+        worker.onmessage = event => {
+          if (event.data?.id !== id) return
+          if (event.data?.error) {
+            console.error('Prediction worker failed:', event.data.error)
+            return
+          }
+          applyResult(event.data.result)
+        }
+
+        worker.onerror = event => {
+          console.error('Prediction worker error:', event.message || event)
+        }
+
+        worker.postMessage({
+          id,
+          tiles: tilesRef.value,
+          patternKeys: patternKeysRef.value,
+          gridSize,
+          options: {
+            includeProbabilities: Boolean(probabilityRef?.value),
+            probabilityTarget: probabilityTargetRef?.value ?? '',
+            performanceProfile: performanceProfileRef?.value ?? 'desktop',
+          },
+        })
+        return
+      }
+
+      // Legacy fallback for environments without Worker support.
       runSolve()
     })
   }
@@ -125,6 +175,17 @@ export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { grid
     recompute,
     { immediate: true, deep: true }
   )
+
+  onUnmounted(() => {
+    if (idleId != null) {
+      cancel(idleId)
+      idleId = null
+    }
+    if (worker) {
+      worker.terminate()
+      worker = null
+    }
+  })
 
   return { guaranteed, guaranteedSlugs, guaranteedCandidates, guaranteedFormationCounts, remainingCounts, remainingRegions, possibleTreasureCells, probabilities, targetProbabilities, globalSolutionCount, probabilityComplete, probabilityReason, probabilityMode, smartDig, smartDigRanking, targetPlan, targetComplete, targetRequiredCount, targetFoundCount, targetRemainingCount, targetLayoutCount }
 }
