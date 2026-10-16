@@ -112,7 +112,10 @@
       v-if="showProbability && probabilityTarget && smartDig && !targetComplete"
       class="next-dig-summary"
     >
-      <div class="font-semibold">Recommended next dig: {{ cellLabel(smartDig.index) }}</div>
+      <div class="font-semibold">
+        Recommended next dig: {{ cellLabel(smartDig.index) }}
+        <span class="opacity-60 font-normal">· {{ solverPerformanceProfile === 'mobile' ? 'Mobile solver' : 'Desktop solver' }}</span>
+      </div>
       <div class="text-[0.68rem] opacity-80">
         {{ Math.round((smartDig.targetHitProbability ?? 0) * 100) }}% direct target chance
         <template v-if="Number.isFinite(smartDig.expectedDigsToComplete)">
@@ -226,7 +229,7 @@ const { getImageSrc } = useReliableAssets()
 const possibleTreasures = useTodayTreasureNames();
 console.log("Trigger computed value:", possibleTreasures.value); // this seems to forcely trigger the computed value
 // your existing props
-const { showTreasureOrder, treasureOrderMap, showLandIdInUrl, showPrediction, interactive, showProbability, probabilityTarget } = defineProps({
+const { showTreasureOrder, treasureOrderMap, showLandIdInUrl, showPrediction, interactive, showProbability, probabilityTarget, solverPerformanceProfile } = defineProps({
   showTreasureOrder: { type: Boolean, default: false },
   treasureOrderMap:  { type: Array,   default: () => [] },
   showLandIdInUrl:   { type: Boolean, default: true },
@@ -234,6 +237,7 @@ const { showTreasureOrder, treasureOrderMap, showLandIdInUrl, showPrediction, in
   interactive:       { type: Boolean, default: true },
   showProbability:    { type: Boolean, default: false },
   probabilityTarget:  { type: String, default: '' },
+  solverPerformanceProfile: { type: String, default: 'desktop' },
 })
 
 // init grid manager
@@ -259,6 +263,7 @@ const { guaranteed, guaranteedSlugs, guaranteedCandidates, probabilities, target
   {
     probabilityRef: toRef(() => showProbability),
     probabilityTargetRef: toRef(() => probabilityTarget),
+    performanceProfileRef: toRef(() => solverPerformanceProfile),
   },
 )
 
