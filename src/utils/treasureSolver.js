@@ -1957,6 +1957,52 @@ export function solveTreasures(
                 (b.expectedDigsToComplete ?? Infinity) ||
               a.index - b.index
             )[0] ?? null
+
+          // v8 robustness guard: expected-cost differences in the reduced
+          // model are estimates, not proof. Do not give up a much stronger
+          // direct hit for a tiny modelled gain. The noisier the state, the
+          // larger the gain an information probe must prove before it wins.
+          const approximateCostMargin =
+            targetFeasibilityCapped || openingLookaheadCapped ? 1.00 :
+              openingLayoutCount > 1000 ? 0.75 :
+                openingLayoutCount > 250 ? 0.65 :
+                  openingLayoutCount > 100 ? 0.50 :
+                    openingLayoutCount > 20 ? 0.35 : 0.15
+
+          const modelPreferredOpening = ranking[0] ?? null
+          if (
+            modelPreferredOpening &&
+            bestDirectOpening &&
+            modelPreferredOpening.index !== bestDirectOpening.index &&
+            Number.isFinite(modelPreferredOpening.expectedDigsToComplete) &&
+            Number.isFinite(bestDirectOpening.expectedDigsToComplete)
+          ) {
+            const modelAdvantage =
+              bestDirectOpening.expectedDigsToComplete -
+              modelPreferredOpening.expectedDigsToComplete
+
+            modelPreferredOpening.robustCostMargin = approximateCostMargin
+            modelPreferredOpening.robustCostAdvantage = modelAdvantage
+
+            if (modelAdvantage < approximateCostMargin - 1e-12) {
+              bestDirectOpening.robustFallbackUsed = true
+              bestDirectOpening.robustReason = 'approximate-cost-margin'
+              bestDirectOpening.robustCostMargin = approximateCostMargin
+              bestDirectOpening.robustCostAdvantage = modelAdvantage
+              bestDirectOpening.modelPreferredIndex = modelPreferredOpening.index
+              bestDirectOpening.modelPreferredProbability =
+                modelPreferredOpening.targetHitProbability
+              bestDirectOpening.modelPreferredExpectedDigs =
+                modelPreferredOpening.expectedDigsToComplete
+
+              const directPosition = ranking.indexOf(bestDirectOpening)
+              if (directPosition > 0) {
+                ranking.splice(directPosition, 1)
+                ranking.unshift(bestDirectOpening)
+              }
+            }
+          }
+
           if (ranking[0] && bestDirectOpening) {
             ranking[0].bestDirectAlternativeIndex = bestDirectOpening.index
             ranking[0].bestDirectAlternativeProbability =
