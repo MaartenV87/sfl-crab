@@ -4,7 +4,7 @@
 // locations off the main thread via requestIdleCallback (with a setTimeout
 // fallback), so a heavy solve never blocks the UI.
 
-import { ref, watch, onUnmounted } from 'vue'
+import { ref, watch, onUnmounted, toRaw } from 'vue'
 import { solveTreasures } from '@/utils/treasureSolver.js'
 
 export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { gridSize = 10, syncRef = null, probabilityRef = null, probabilityTargetRef = null, performanceProfileRef = null } = {}) {
@@ -29,6 +29,7 @@ export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { grid
   const targetFoundCount = ref(0)
   const targetRemainingCount = ref(0)
   const targetLayoutCount = ref(0)
+  const isCalculating = ref(false)
 
   const schedule = (typeof window !== 'undefined' && window.requestIdleCallback)
     ? window.requestIdleCallback.bind(window)
@@ -42,20 +43,6 @@ export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { grid
   let solveId = 0
 
   function applyResult(result) {
-    applyResult(result)
-  }
-
-  function runSolve() {
-    const result = solveTreasures(
-      tilesRef.value,
-      patternKeysRef.value,
-      gridSize,
-      {
-        includeProbabilities: Boolean(probabilityRef?.value),
-        probabilityTarget: probabilityTargetRef?.value ?? '',
-        performanceProfile: performanceProfileRef?.value ?? 'desktop',
-      },
-    )
     guaranteed.value = result.guaranteed
     guaranteedSlugs.value = result.guaranteedSlugs
     guaranteedCandidates.value = result.guaranteedCandidates
@@ -79,6 +66,31 @@ export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { grid
     targetLayoutCount.value = result.targetLayoutCount ?? 0
   }
 
+  function snapshotForWorker(value) {
+    // Vue refs can contain reactive Proxies, which cannot be posted to a
+    // worker. Convert the small grid/pattern payload into plain cloneable data.
+    return JSON.parse(JSON.stringify(toRaw(value)))
+  }
+
+  function runSolve() {
+    isCalculating.value = true
+    try {
+      const result = solveTreasures(
+        tilesRef.value,
+        patternKeysRef.value,
+        gridSize,
+        {
+          includeProbabilities: Boolean(probabilityRef?.value),
+          probabilityTarget: probabilityTargetRef?.value ?? '',
+          performanceProfile: performanceProfileRef?.value ?? 'desktop',
+        },
+      )
+      applyResult(result)
+    } finally {
+      isCalculating.value = false
+    }
+  }
+
   function recompute() {
     if (idleId != null) { cancel(idleId); idleId = null }
 
@@ -90,6 +102,7 @@ export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { grid
       worker.terminate()
       worker = null
     }
+    isCalculating.value = false
 
     if (!enabledRef.value) {
       guaranteed.value = new Set()
@@ -135,24 +148,34 @@ export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { grid
           new URL('../workers/predictionSolver.worker.js', import.meta.url),
           { type: 'module' },
         )
+        isCalculating.value = true
 
         worker.onmessage = event => {
           if (event.data?.id !== id) return
           if (event.data?.error) {
             console.error('Prediction worker failed:', event.data.error)
+            isCalculating.value = false
+            worker?.terminate()
+            worker = null
             return
           }
           applyResult(event.data.result)
+          isCalculating.value = false
+          worker?.terminate()
+          worker = null
         }
 
         worker.onerror = event => {
           console.error('Prediction worker error:', event.message || event)
+          isCalculating.value = false
+          worker?.terminate()
+          worker = null
         }
 
         worker.postMessage({
           id,
-          tiles: tilesRef.value,
-          patternKeys: patternKeysRef.value,
+          tiles: snapshotForWorker(tilesRef.value),
+          patternKeys: snapshotForWorker(patternKeysRef.value),
           gridSize,
           options: {
             includeProbabilities: Boolean(probabilityRef?.value),
@@ -189,7 +212,8 @@ export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { grid
       worker.terminate()
       worker = null
     }
+    isCalculating.value = false
   })
 
-  return { guaranteed, guaranteedSlugs, guaranteedCandidates, guaranteedFormationCounts, remainingCounts, remainingRegions, possibleTreasureCells, probabilities, targetProbabilities, globalSolutionCount, probabilityComplete, probabilityReason, probabilityMode, smartDig, smartDigRanking, targetPlan, targetComplete, targetRequiredCount, targetFoundCount, targetRemainingCount, targetLayoutCount }
+  return { isCalculating, guaranteed, guaranteedSlugs, guaranteedCandidates, guaranteedFormationCounts, remainingCounts, remainingRegions, possibleTreasureCells, probabilities, targetProbabilities, globalSolutionCount, probabilityComplete, probabilityReason, probabilityMode, smartDig, smartDigRanking, targetPlan, targetComplete, targetRequiredCount, targetFoundCount, targetRemainingCount, targetLayoutCount }
 }
