@@ -23,6 +23,7 @@
         v-model:showPrediction="showPrediction"
         v-model:showProbability="showProbability"
         v-model:probabilityTarget="probabilityTarget"
+        v-model:solverPerformanceProfile="solverPerformanceProfile"
         :probability-targets="probabilityTargets"
         :dig-day-sync-status="digDaySyncStatus"
         :dig-day-updated-at="digDayUpdatedAt"
@@ -49,6 +50,7 @@
         :show-prediction="showPrediction"
         :show-probability="showProbability"
         :probability-target="probabilityTarget"
+        :solver-performance-profile="solverPerformanceProfile"
         :interactive="true"
       />
     </template>
@@ -141,6 +143,12 @@ const showProbability = useLocalStorage(
 )
 const probabilityTarget = useLocalStorage(
   `probabilityTarget-${landId}`, ''
+)
+const solverPerformanceProfile = useLocalStorage(
+  'solverPerformanceProfile',
+  typeof window !== 'undefined' && window.matchMedia?.('(max-width: 767px)').matches
+    ? 'mobile'
+    : 'desktop'
 )
 
 const grid = useGridManager(landId)
