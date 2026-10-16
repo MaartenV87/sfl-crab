@@ -109,7 +109,17 @@
     </div>
 
     <div
-      v-if="showProbability && probabilityTarget && smartDig && !targetComplete"
+      v-if="showProbability && probabilityTarget && isSolving && !targetComplete"
+      class="next-dig-summary"
+    >
+      <div class="font-semibold">Calculating next dig…</div>
+      <div class="text-[0.68rem] opacity-70">
+        Solver is running in the background. The page remains usable.
+      </div>
+    </div>
+
+    <div
+      v-if="showProbability && probabilityTarget && smartDig && !targetComplete && !isSolving"
       class="next-dig-summary"
     >
       <div class="font-semibold">
@@ -256,7 +266,7 @@ const picker = ref(null)
 // able to anchor to its shape. Including all shapes only ever makes deductions
 // more conservative (never a wrong guarantee).
 const { solverPatternKeys, desert } = useLandData()
-const { guaranteed, guaranteedSlugs, guaranteedCandidates, probabilities, targetProbabilities, globalSolutionCount, probabilityComplete, probabilityMode, smartDig, smartDigRanking, targetPlan, targetComplete, targetRequiredCount, targetFoundCount, targetRemainingCount, targetLayoutCount } = usePredictionEngine(
+const { guaranteed, guaranteedSlugs, guaranteedCandidates, probabilities, targetProbabilities, globalSolutionCount, probabilityComplete, probabilityMode, smartDig, smartDigRanking, targetPlan, targetComplete, targetRequiredCount, targetFoundCount, targetRemainingCount, targetLayoutCount, isSolving } = usePredictionEngine(
   tiles,
   solverPatternKeys,
   toRef(() => showPrediction || showProbability),
