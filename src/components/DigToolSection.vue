@@ -32,6 +32,17 @@
         {{ treasureDisplayName(slug) }}
       </option>
     </select>
+    <select
+      v-if="showProbability"
+      class="select select-bordered select-sm max-w-44"
+      :value="solverPerformanceProfile"
+      @change="$emit('update:solverPerformanceProfile', $event.target.value)"
+      aria-label="Solver performance mode"
+      title="Desktop uses deeper search. Mobile reduces solver work to keep the page responsive."
+    >
+      <option value="desktop">Desktop solver</option>
+      <option value="mobile">Mobile solver</option>
+    </select>
     <button
       type="button"
       class="btn btn-info btn-sm sm:btn-md"
@@ -164,6 +175,7 @@ defineProps({
   showProbability: { type: Boolean, default: false },
   probabilityTarget: { type: String, default: '' },
   probabilityTargets: { type: Array, default: () => [] },
+  solverPerformanceProfile: { type: String, default: 'desktop' },
   digDaySyncStatus: { type: String, default: 'idle' },
   digDayUpdatedAt: { type: String, default: null },
   digDaySyncError: { type: String, default: null },
@@ -207,7 +219,7 @@ async function copyMarksLink (event) {
 }
 
 // we'll emit update:showTreasureOrder via @change above
-const emit = defineEmits(['update:showTreasureOrder', 'update:hideLandIdInUrl', 'update:showPrediction', 'update:showProbability', 'update:probabilityTarget', 'open-replay', 'copy-text-log'])
+const emit = defineEmits(['update:showTreasureOrder', 'update:hideLandIdInUrl', 'update:showPrediction', 'update:showProbability', 'update:probabilityTarget', 'update:solverPerformanceProfile', 'open-replay', 'copy-text-log'])
 
 function copyTextLog () {
   emit('copy-text-log')
