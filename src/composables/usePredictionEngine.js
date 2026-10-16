@@ -29,6 +29,7 @@ export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { grid
   const targetFoundCount = ref(0)
   const targetRemainingCount = ref(0)
   const targetLayoutCount = ref(0)
+  const isSolving = ref(false)
 
   let worker = null
   let requestId = 0
@@ -97,6 +98,7 @@ export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { grid
   function runSolveSync() {
     stopWorker()
     requestId += 1
+    isSolving.value = true
     applyResult(
       solveTreasures(
         tilesRef.value,
@@ -105,11 +107,13 @@ export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { grid
         currentOptions(),
       ),
     )
+    isSolving.value = false
   }
 
   function runSolveWorker() {
     stopWorker()
     const thisRequest = ++requestId
+    isSolving.value = true
 
     try {
       worker = new Worker(
@@ -118,7 +122,8 @@ export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { grid
       )
     } catch (error) {
       console.warn('Prediction Web Worker unavailable; using synchronous fallback.', error)
-      runSolveSync()
+      isSolving.value = false
+      console.error('Prediction Web Worker unavailable.', error)
       return
     }
 
@@ -127,16 +132,19 @@ export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { grid
       const payload = event.data || {}
       if (!payload.ok) {
         console.error('Prediction worker failed:', payload.error || 'unknown error')
+        isSolving.value = false
         stopWorker()
         return
       }
       applyResult(payload.result)
+      isSolving.value = false
       stopWorker()
     }
 
     worker.onerror = event => {
       if (thisRequest !== requestId) return
       console.error('Prediction worker crashed:', event.message || event)
+      isSolving.value = false
       stopWorker()
     }
 
@@ -163,6 +171,7 @@ export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { grid
     requestId += 1
 
     if (!enabledRef.value) {
+      isSolving.value = false
       clearResult()
       return
     }
@@ -191,7 +200,8 @@ export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { grid
   onScopeDispose(() => {
     stopWorker()
     requestId += 1
+    isSolving.value = false
   })
 
-  return { guaranteed, guaranteedSlugs, guaranteedCandidates, guaranteedFormationCounts, remainingCounts, remainingRegions, possibleTreasureCells, probabilities, targetProbabilities, globalSolutionCount, probabilityComplete, probabilityReason, probabilityMode, smartDig, smartDigRanking, targetPlan, targetComplete, targetRequiredCount, targetFoundCount, targetRemainingCount, targetLayoutCount }
+  return { guaranteed, guaranteedSlugs, guaranteedCandidates, guaranteedFormationCounts, remainingCounts, remainingRegions, possibleTreasureCells, probabilities, targetProbabilities, globalSolutionCount, probabilityComplete, probabilityReason, probabilityMode, smartDig, smartDigRanking, targetPlan, targetComplete, targetRequiredCount, targetFoundCount, targetRemainingCount, targetLayoutCount, isSolving }
 }
