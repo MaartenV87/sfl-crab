@@ -2868,6 +2868,162 @@ export function solveTreasures(
             candidate.lookaheadCapped = adaptiveCapped
           }
 
+          // v7 exact last-target endgame.
+          //
+          // With one target left and a small number of target layouts, solve
+          // the decision problem to completion instead of using a depth/node
+          // capped horizon. A state is fully described by the still-compatible
+          // full solutions; past non-target digs need not be memoized because
+          // their observed information is already encoded by that subset.
+          //
+          // Useless actions (same posterior state, no target hit) are skipped,
+          // and actions that induce the same posterior partition are evaluated
+          // only once per state. This makes the 4-layout style endgames from
+          // real logs tiny and gives a proof-quality expected dig count.
+          const useOptimalEndgame =
+            targetRemainingCount === 1 &&
+            layoutCount <= 12 &&
+            globalSolutionCount <= 1500
+
+          if (useOptimalEndgame) {
+            const targetOutcomeCode =
+              outcomeCodeByName.get(`treasure:${normalizedProbabilityTarget}`)
+            const allActions = smartDigRanking
+              .map(item => item.index)
+              .filter(idx => !actuallyRevealedCells.has(idx))
+              .sort((a, b) => a - b)
+            const optimalMemo = new Map()
+            let optimalStates = 0
+
+            const posteriorWeight = indexes => {
+              let sum = 0
+              for (const si of indexes) sum += solutionWeights[si] ?? 0
+              return sum
+            }
+
+            const directRolloutCost = indexes => {
+              const total = posteriorWeight(indexes)
+              if (total <= 0) return 0
+              const targetMass = new Map()
+              for (const si of indexes) {
+                const targetIdx = targetSolutionCells[si]?.[0]
+                if (!Number.isFinite(targetIdx)) continue
+                targetMass.set(
+                  targetIdx,
+                  (targetMass.get(targetIdx) ?? 0) +
+                    (solutionWeights[si] ?? 0),
+                )
+              }
+              const order = [...targetMass.entries()]
+                .sort((a, b) => b[1] - a[1] || a[0] - b[0])
+              let expected = 0
+              for (let i = 0; i < order.length; i++) {
+                expected += (order[i][1] / total) * (i + 1)
+              }
+              return expected
+            }
+
+            const partitionForAction = (indexes, action) => {
+              const groups = new Map()
+              for (const si of indexes) {
+                const code = solutionOutcomeCodes[si]?.[action] ?? 0
+                if (!groups.has(code)) groups.set(code, [])
+                groups.get(code).push(si)
+              }
+              return groups
+            }
+
+            const optimalCost = indexes => {
+              if (!indexes.length) return 0
+              const key = indexes.join(',')
+              if (optimalMemo.has(key)) return optimalMemo.get(key)
+              optimalStates += 1
+
+              let best = directRolloutCost(indexes)
+              const total = posteriorWeight(indexes)
+              if (total <= 0 || best <= 1 + 1e-12) {
+                optimalMemo.set(key, best)
+                return best
+              }
+
+              const seenPartitions = new Set()
+              for (const action of allActions) {
+                const groups = partitionForAction(indexes, action)
+                const targetBranch = targetOutcomeCode == null
+                  ? null
+                  : groups.get(targetOutcomeCode)
+                const targetMass = targetBranch
+                  ? posteriorWeight(targetBranch)
+                  : 0
+
+                // One unchanged non-target bucket and no possible hit: this dig
+                // cannot improve the state.
+                if (groups.size === 1 && targetMass <= 1e-12) continue
+
+                const nonTargetGroups = []
+                for (const [code, branch] of groups) {
+                  if (code === targetOutcomeCode) continue
+                  if (branch.length) nonTargetGroups.push(branch)
+                }
+
+                // Canonicalize by posterior subsets, not raw outcome labels:
+                // different cells that split the state identically are the
+                // same decision for the one-target objective.
+                const partitionKey = nonTargetGroups
+                  .map(branch => branch.join(','))
+                  .sort()
+                  .join('|')
+                if (seenPartitions.has(partitionKey)) continue
+                seenPartitions.add(partitionKey)
+
+                let future = 0
+                for (const branch of nonTargetGroups) {
+                  const p = posteriorWeight(branch) / total
+                  if (p <= 0) continue
+                  // Every non-target branch is a strict posterior reduction
+                  // for useful actions, so recursion cannot cycle.
+                  if (branch.length === indexes.length) {
+                    future = Infinity
+                    break
+                  }
+                  future += p * optimalCost(branch)
+                }
+
+                const cost = 1 + future
+                if (cost < best) best = cost
+              }
+
+              optimalMemo.set(key, best)
+              return best
+            }
+
+            const rootTotal = posteriorWeight(initialSolutions)
+            for (const candidate of smartDigRanking) {
+              const firstIdx = candidate.index
+              if (!allActions.includes(firstIdx)) continue
+
+              const groups = partitionForAction(initialSolutions, firstIdx)
+              let expectedFuture = 0
+              for (const [code, branch] of groups) {
+                if (code === targetOutcomeCode) continue
+                const p = posteriorWeight(branch) / rootTotal
+                if (p <= 0) continue
+                if (branch.length === initialSolutions.length) {
+                  expectedFuture = Infinity
+                  break
+                }
+                expectedFuture += p * optimalCost(branch)
+              }
+
+              candidate.expectedDigsToComplete = 1 + expectedFuture
+              candidate.adaptiveScore = -candidate.expectedDigsToComplete
+              candidate.lookaheadCapped = false
+              candidate.endgameOptimal = true
+              candidate.endgameStateCount = optimalStates
+              candidate.adaptiveDepth = 0
+            }
+          }
+
           smartDigRanking.sort((a, b) =>
             (a.expectedDigsToComplete ?? Infinity) -
               (b.expectedDigsToComplete ?? Infinity) ||
