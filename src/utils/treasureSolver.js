@@ -1205,7 +1205,11 @@ export function solveTreasures(
               for (const [idx, name] of cellsInConfiguration) {
                 if (!actuallyRevealedCells.has(idx)) hiddenCells.set(idx, name)
               }
-              openingRecords.push({ targetCells, cells: hiddenCells })
+              openingRecords.push({
+                targetCells,
+                cells: hiddenCells,
+                allCells: new Map(cellsInConfiguration),
+              })
             } else {
               openingRecordsComplete = false
               openingRecords.length = 0
@@ -1298,6 +1302,179 @@ export function solveTreasures(
         }
 
         if (openingAborted || configurationCount === 0) return null
+
+        // v7 target-centric feasibility filter.
+        //
+        // The reduced model can enumerate only target-bearing formations very
+        // cheaply, but many such target layouts cannot coexist with the OTHER
+        // daily formations. Before expected-cost planning, ask only the much
+        // cheaper existential question: "does at least one completion of the
+        // unrelated formations exist?" We stop at the first completion and
+        // never enumerate every full board.
+        //
+        // If the feasibility budget is exhausted, the record is retained
+        // (unknown != impossible), preserving conservative behaviour.
+        let targetFeasibilityChecked = 0
+        let targetFeasibilityRejected = 0
+        let targetFeasibilityCapped = false
+
+        if (
+          openingRecordsComplete &&
+          openingRecords.length === configurationCount &&
+          openingRecords.length <= OPENING_DEEP_CONFIG_CAP
+        ) {
+          const nonTargetGroups = probabilityGroups.filter(
+            group => !targetKeys.has(group.key),
+          )
+          const revealedEntries = [...revealedTreasureName]
+          const crabNeighbourIndexes = [...revealedCrab].map(idx => {
+            const x = idx % gridSize
+            const y = Math.floor(idx / gridSize)
+            return [[1, 0], [-1, 0], [0, 1], [0, -1]]
+              .map(([dx, dy]) => [x + dx, y + dy])
+              .filter(([nx, ny]) => inBounds(nx, ny))
+              .map(([nx, ny]) => ny * gridSize + nx)
+          })
+
+          let feasibilityNodes = 0
+          const FEASIBILITY_NODE_CAP =
+            openingRecords.length <= 500 ? 300000 : 120000
+
+          const recordHasCompletion = record => {
+            const occupiedFeasible = new Set(fixedProbabilityCells)
+            for (const idx of record.allCells.keys()) occupiedFeasible.add(idx)
+
+            const revealCovered = (idx, name) => {
+              if (!occupiedFeasible.has(idx)) return false
+              if (record.allCells.has(idx)) {
+                return namesMatch(record.allCells.get(idx), name)
+              }
+              // Any fixed confirmed placement covering this cell was already
+              // validated by the main solver.
+              return fixedProbabilityCells.has(idx)
+            }
+
+            const allRevealsCoveredFeasible = () =>
+              revealedEntries.every(([idx, name]) => revealCovered(idx, name))
+
+            const allCrabsSatisfiedFeasible = () =>
+              crabNeighbourIndexes.every(neighbours =>
+                neighbours.some(idx => occupiedFeasible.has(idx))
+              )
+
+            const placementFits = plots =>
+              ![...plots.keys()].some(idx => occupiedFeasible.has(idx))
+
+            const remainingCanCover = (groupIndex, startPlacement, left, predicate) => {
+              for (let gi = groupIndex; gi < nonTargetGroups.length; gi++) {
+                const group = nonTargetGroups[gi]
+                const from = gi === groupIndex && left > 0 ? startPlacement : 0
+                if (gi === groupIndex && left === 0) continue
+                for (let pi = from; pi < group.placements.length; pi++) {
+                  const plots = group.placements[pi]
+                  if (!placementFits(plots)) continue
+                  if (predicate(plots)) return true
+                }
+              }
+              return false
+            }
+
+            const feasibleRemainder = (groupIndex, startPlacement, left) => {
+              for (const [idx, name] of revealedEntries) {
+                if (revealCovered(idx, name)) continue
+                if (!remainingCanCover(
+                  groupIndex,
+                  startPlacement,
+                  left,
+                  plots => namesMatch(plots.get(idx), name),
+                )) return false
+              }
+
+              for (const neighbours of crabNeighbourIndexes) {
+                if (neighbours.some(idx => occupiedFeasible.has(idx))) continue
+                if (!remainingCanCover(
+                  groupIndex,
+                  startPlacement,
+                  left,
+                  plots => neighbours.some(idx => plots.has(idx)),
+                )) return false
+              }
+              return true
+            }
+
+            let found = false
+            let capped = false
+
+            const search = (groupIndex, startPlacement, left) => {
+              if (found || capped) return
+              feasibilityNodes += 1
+              if (feasibilityNodes > FEASIBILITY_NODE_CAP) {
+                capped = true
+                targetFeasibilityCapped = true
+                return
+              }
+
+              if (groupIndex >= nonTargetGroups.length) {
+                if (allRevealsCoveredFeasible() && allCrabsSatisfiedFeasible()) {
+                  found = true
+                }
+                return
+              }
+
+              if (!feasibleRemainder(groupIndex, startPlacement, left)) return
+
+              const group = nonTargetGroups[groupIndex]
+              if (left === 0) {
+                search(
+                  groupIndex + 1,
+                  0,
+                  nonTargetGroups[groupIndex + 1]?.need ?? 0,
+                )
+                return
+              }
+
+              for (let pi = startPlacement; pi < group.placements.length; pi++) {
+                if (found || capped) return
+                const plots = group.placements[pi]
+                const keys = [...plots.keys()]
+                if (keys.some(idx => occupiedFeasible.has(idx))) continue
+                for (const idx of keys) occupiedFeasible.add(idx)
+                search(groupIndex, pi + 1, left - 1)
+                for (const idx of keys) occupiedFeasible.delete(idx)
+              }
+            }
+
+            if (!nonTargetGroups.length) {
+              found = allRevealsCoveredFeasible() && allCrabsSatisfiedFeasible()
+            } else {
+              search(0, 0, nonTargetGroups[0].need)
+            }
+
+            return capped ? null : found
+          }
+
+          const feasibleRecords = []
+          for (const record of openingRecords) {
+            if (targetFeasibilityCapped) {
+              feasibleRecords.push(record)
+              continue
+            }
+            const feasible = recordHasCompletion(record)
+            if (feasible === null) {
+              feasibleRecords.push(record)
+              continue
+            }
+            targetFeasibilityChecked += 1
+            if (feasible) feasibleRecords.push(record)
+            else targetFeasibilityRejected += 1
+          }
+
+          if (feasibleRecords.length > 0) {
+            openingRecords.length = 0
+            openingRecords.push(...feasibleRecords)
+            configurationCount = feasibleRecords.length
+          }
+        }
 
         const deepTargetModel =
           openingRecordsComplete &&
@@ -1724,6 +1901,9 @@ export function solveTreasures(
           return {
             configurationCount,
             targetLayoutCount: openingLayoutCount,
+            targetFeasibilityChecked,
+            targetFeasibilityRejected,
+            targetFeasibilityCapped,
             targetProbabilities: openingTargetProbabilities,
             ranking,
             best: ranking[0] ?? null,
@@ -1749,6 +1929,10 @@ export function solveTreasures(
 
         return {
           configurationCount,
+          targetLayoutCount: openingLayoutCount,
+          targetFeasibilityChecked,
+          targetFeasibilityRejected,
+          targetFeasibilityCapped,
           targetProbabilities: openingTargetProbabilities,
           ranking,
           best: ranking[0] ?? null,
