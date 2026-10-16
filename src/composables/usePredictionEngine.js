@@ -82,6 +82,15 @@ export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { grid
   function recompute() {
     if (idleId != null) { cancel(idleId); idleId = null }
 
+    // Cancel any in-flight solve immediately. Otherwise an older worker can
+    // finish after a newer grid state (or disabled predictions) and overwrite
+    // the UI with stale results.
+    solveId += 1
+    if (worker) {
+      worker.terminate()
+      worker = null
+    }
+
     if (!enabledRef.value) {
       guaranteed.value = new Set()
       guaranteedSlugs.value = new Map()
@@ -121,11 +130,6 @@ export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { grid
       // Terminating the previous worker also gives us a real cancellation
       // mechanism when a new dig arrives before the previous solve finished.
       if (typeof Worker !== 'undefined') {
-        if (worker) {
-          worker.terminate()
-          worker = null
-        }
-
         const id = ++solveId
         worker = new Worker(
           new URL('../workers/predictionSolver.worker.js', import.meta.url),
