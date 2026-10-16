@@ -2895,7 +2895,7 @@ export function solveTreasures(
           const useOptimalEndgame =
             targetRemainingCount === 1 &&
             layoutCount <= 12 &&
-            globalSolutionCount <= 1500
+            globalSolutionCount <= 750
 
           if (useOptimalEndgame) {
             const targetOutcomeCode =
@@ -3033,6 +3033,12 @@ export function solveTreasures(
               candidate.endgameOptimal = true
               candidate.endgameStateCount = optimalStates
               candidate.adaptiveDepth = 0
+            }
+
+            for (const candidate of smartDigRanking) {
+              if (candidate.endgameOptimal) {
+                candidate.endgameStateCount = optimalStates
+              }
             }
           }
 
