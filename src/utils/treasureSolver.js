@@ -1725,6 +1725,31 @@ export function solveTreasures(
             item.openingTargetLayoutCount = openingLayoutCount
             item.targetHitProbability = stats.hit
             item.targetInfoGain = stats.info
+            item.configurationTargetHitProbability =
+              openingRecords.length > 0
+                ? openingRecords.filter(record =>
+                    record.targetCells.includes(idx)
+                  ).length / openingRecords.length
+                : 0
+
+            let companion = 0
+            item.outcomes = [...stats.buckets.entries()]
+              .map(([outcome, probability]) => {
+                if (
+                  outcome.startsWith('treasure:') &&
+                  outcome !== `treasure:${normalizedProbabilityTarget}`
+                ) companion += probability
+                return {
+                  outcome,
+                  probability,
+                  count: probability * openingRecords.length,
+                }
+              })
+              .sort((a, b) =>
+                b.probability - a.probability ||
+                a.outcome.localeCompare(b.outcome)
+              )
+            item.companionProbability = companion
           }
 
           const searchDepth =
