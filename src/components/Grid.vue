@@ -68,7 +68,7 @@
         </span>
 
         <span
-          v-if="showProbability && smartDig?.index === index"
+          v-if="showProbability && !isSolving && smartDig?.index === index"
           class="smart-dig-badge"
           :title="smartDigTitle"
         >NEXT</span>
