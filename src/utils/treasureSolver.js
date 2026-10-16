@@ -99,8 +99,8 @@ export function solveTreasures(
 ) {
   const mobilePerformance = performanceProfile === 'mobile'
   if (mobilePerformance) {
-    probabilitySolutionCap = Math.min(probabilitySolutionCap, 6000)
-    probabilityNodeCap = Math.min(probabilityNodeCap, 40000)
+    probabilitySolutionCap = Math.min(probabilitySolutionCap, 3000)
+    probabilityNodeCap = Math.min(probabilityNodeCap, 20000)
   }
   const guaranteed = new Set()
   if (!patternKeys?.length) {
@@ -1171,12 +1171,12 @@ export function solveTreasures(
         // memory cost.
         const openingRecords = []
         let openingRecordsComplete = true
-        const OPENING_DEEP_CONFIG_CAP = mobilePerformance ? 3000 : 12000
+        const OPENING_DEEP_CONFIG_CAP = mobilePerformance ? 1500 : 12000
         let configurationCount = 0
         let openingNodes = 0
         let openingAborted = false
-        const OPENING_CONFIGURATION_CAP = mobilePerformance ? 180000 : 750000
-        const OPENING_NODE_CAP = mobilePerformance ? 450000 : 2000000
+        const OPENING_CONFIGURATION_CAP = mobilePerformance ? 60000 : 750000
+        const OPENING_NODE_CAP = mobilePerformance ? 150000 : 2000000
 
         const recordOpeningConfiguration = () => {
           const cellsInConfiguration = new Map()
@@ -1345,8 +1345,8 @@ export function solveTreasures(
           let feasibilityNodes = 0
           const FEASIBILITY_NODE_CAP = mobilePerformance
             ? (
-                openingRecords.length <= 500 ? 90000 :
-                  openingRecords.length <= 3000 ? 60000 : 35000
+                openingRecords.length <= 300 ? 30000 :
+                  openingRecords.length <= 1500 ? 18000 : 10000
               )
             : (
                 openingRecords.length <= 500 ? 350000 :
@@ -1849,7 +1849,7 @@ export function solveTreasures(
 
           let openingAdaptiveNodes = 0
           const OPENING_ADAPTIVE_NODE_CAP = mobilePerformance
-            ? (openingLayoutCount <= 20 ? 25000 : 12000)
+            ? (openingLayoutCount <= 20 ? 12000 : 5000)
             : (openingLayoutCount <= 20 ? 100000 : 50000)
           let openingLookaheadCapped = false
           const openingMemo = new Map()
@@ -2759,7 +2759,7 @@ export function solveTreasures(
           )
 
           let adaptiveNodes = 0
-          const ADAPTIVE_NODE_CAP = mobilePerformance ? 18000 : 75000
+          const ADAPTIVE_NODE_CAP = mobilePerformance ? 8000 : 75000
           let adaptiveCapped = false
           const memo = new Map()
 
@@ -2978,8 +2978,8 @@ export function solveTreasures(
           // real logs tiny and gives a proof-quality expected dig count.
           const optimalSolutionCap = mobilePerformance
             ? (
-                layoutCount <= 4 ? 1000 :
-                  layoutCount <= 8 ? 700 : 450
+                layoutCount <= 4 ? 600 :
+                  layoutCount <= 8 ? 400 : 250
               )
             : (
                 layoutCount <= 4 ? 2500 :
