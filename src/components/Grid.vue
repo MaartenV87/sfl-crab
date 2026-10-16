@@ -116,7 +116,7 @@
       <div class="text-[0.68rem] opacity-80">
         {{ Math.round((smartDig.targetHitProbability ?? 0) * 100) }}% direct target chance
         <template v-if="Number.isFinite(smartDig.expectedDigsToComplete)">
-          · ~{{ smartDig.expectedDigsToComplete.toFixed(2) }} expected digs to finish
+          · {{ smartDig.endgameOptimal ? '' : '~' }}{{ smartDig.expectedDigsToComplete.toFixed(2) }} expected digs to finish
         </template>
         <template v-else-if="smartDig.adaptiveNext">
           · ~{{ Math.round((smartDig.expectedFoundFraction ?? smartDig.twoStepHitProbability ?? 0) * 100) }}% expected target progress
@@ -124,6 +124,9 @@
       </div>
       <div class="text-[0.62rem] opacity-65 mt-0.5">
         Follow NEXT first. When enough target layouts are known, NEXT minimizes expected digs until all remaining selected targets are found.
+        <template v-if="smartDig.endgameOptimal">
+          This endgame is solved to completion, not horizon-estimated.
+        </template>
         <template
           v-if="Number.isFinite(smartDig.bestDirectAlternativeIndex) &&
             smartDig.bestDirectAlternativeIndex !== smartDig.index"
@@ -404,6 +407,9 @@ const smartDigTitle = computed(() => {
         return `NEXT for ${label}: ${col}${row} — ${hit}% direct hit; ~${expectedDigs} expected digs to finish; reduced target-layout model; depth ${depth}`
       }
       return `NEXT for ${label}: ${col}${row} — ${hit}% direct hit, ~${progress}% adaptive target progress; ${companion}% companion chance; ${info}% information split`
+    }
+    if (smartDig.value.endgameOptimal) {
+      return `NEXT for ${label}: ${col}${row} — ${hit}% direct hit; ${expectedDigs} exact expected digs to finish; optimal endgame policy`
     }
     return `NEXT for ${label}: ${col}${row} — ${hit}% direct hit${expectedDigs !== null ? `; ~${expectedDigs} expected digs to finish` : ''}; search depth ${depth}`
   }
