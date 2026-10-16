@@ -1,7 +1,7 @@
 import { getTodayUTC } from '@/utils/buildDigTimeline.js'
 
 export const PREDICTION_JOURNAL_VERSION = 1
-export const PREDICTION_ALGORITHM_VERSION = 'adaptive-next-v6'
+export const PREDICTION_ALGORITHM_VERSION = 'adaptive-next-v7'
 
 function storageKey(landId, utcDate) {
   return `predictionJournal_${String(landId || '0')}_${utcDate || getTodayUTC()}`
@@ -59,9 +59,11 @@ function normalizeBest(best) {
     adaptiveScore: Number(best.adaptiveScore) || 0,
     expectedFoundFraction: Number(best.expectedFoundFraction) || 0,
     expectedRemainingTargets: Number(best.expectedRemainingTargets) || 0,
-    expectedDigsToComplete: Number.isFinite(Number(best.expectedDigsToComplete))
-      ? Number(best.expectedDigsToComplete)
-      : null,
+    expectedDigsToComplete:
+      best.expectedDigsToComplete != null &&
+      Number.isFinite(Number(best.expectedDigsToComplete))
+        ? Number(best.expectedDigsToComplete)
+        : null,
     completionProbability: Number(best.completionProbability) || 0,
     lookaheadCapped: Boolean(best.lookaheadCapped),
     bestDirectAlternativeIndex: Number.isFinite(Number(best.bestDirectAlternativeIndex))
@@ -70,9 +72,15 @@ function normalizeBest(best) {
     bestDirectAlternativeProbability:
       Number(best.bestDirectAlternativeProbability) || 0,
     bestDirectAlternativeExpectedDigs:
+      best.bestDirectAlternativeExpectedDigs != null &&
       Number.isFinite(Number(best.bestDirectAlternativeExpectedDigs))
         ? Number(best.bestDirectAlternativeExpectedDigs)
         : null,
+    targetFeasibilityChecked: Number(best.targetFeasibilityChecked) || 0,
+    targetFeasibilityRejected: Number(best.targetFeasibilityRejected) || 0,
+    targetFeasibilityCapped: Boolean(best.targetFeasibilityCapped),
+    endgameOptimal: Boolean(best.endgameOptimal),
+    endgameStateCount: Number(best.endgameStateCount) || 0,
   }
 }
 

@@ -279,15 +279,35 @@ export function buildDigTextLog({
           verdict = hit ? 'TARGET_HIT' : 'NO_TARGET'
         }
 
+        const hasExpectedDigs =
+          snap.best.expectedDigsToComplete != null &&
+          Number.isFinite(Number(snap.best.expectedDigsToComplete))
+        const expectedDigsText = hasExpectedDigs
+          ? Number(snap.best.expectedDigsToComplete).toFixed(2)
+          : '-'
         const info = snap.best.targetAware
           ? snap.best.openingMode
-            ? `OPENING=YES | TARGET_INFO_SPLIT=${Math.round((Number(snap.best.targetInfoGain) || 0) * 100)}% | TARGET_HIT_P=${Math.round((Number(snap.best.targetHitProbability) || 0) * 100)}% | CONFIG_HIT_P=${Math.round((Number(snap.best.configurationTargetHitProbability) || 0) * 100)}% | EXPECTED_DIGS_LEFT=${Number.isFinite(Number(snap.best.expectedDigsToComplete)) ? Number(snap.best.expectedDigsToComplete).toFixed(2) : '-'} | DEPTH=${Number(snap.best.adaptiveDepth) || 0} | TARGET_LAYOUTS=${Number(snap.best.openingTargetLayoutCount) || 0} | TARGET_CONFIGS=${Number(snap.best.openingConfigurationCount) || 0} | CAPPED=${snap.best.lookaheadCapped ? 'YES' : 'NO'}`
-            : `TARGET_INFO_GAIN=${Math.round((Number(snap.best.targetInfoGain) || 0) * 100)}% | TARGET_HIT_P=${Math.round((Number(snap.best.targetHitProbability) || 0) * 100)}% | DEPTH=${Number(snap.best.adaptiveDepth) || 0} | EXPECTED_DIGS_LEFT=${Number.isFinite(Number(snap.best.expectedDigsToComplete)) ? Number(snap.best.expectedDigsToComplete).toFixed(2) : '-'} | EXPECTED_LEFT=${Number(snap.best.expectedRemainingTargets) || 0} | CAPPED=${snap.best.lookaheadCapped ? 'YES' : 'NO'}`
+            ? `OPENING=YES | TARGET_INFO_SPLIT=${Math.round((Number(snap.best.targetInfoGain) || 0) * 100)}% | TARGET_HIT_P=${Math.round((Number(snap.best.targetHitProbability) || 0) * 100)}% | CONFIG_HIT_P=${Math.round((Number(snap.best.configurationTargetHitProbability) || 0) * 100)}% | EXPECTED_DIGS_LEFT=${expectedDigsText} | DEPTH=${Number(snap.best.adaptiveDepth) || 0} | TARGET_LAYOUTS=${Number(snap.best.openingTargetLayoutCount) || 0} | TARGET_CONFIGS=${Number(snap.best.openingConfigurationCount) || 0} | FEAS_CHECKED=${Number(snap.best.targetFeasibilityChecked) || 0} | FEAS_REJECTED=${Number(snap.best.targetFeasibilityRejected) || 0} | FEAS_CAPPED=${snap.best.targetFeasibilityCapped ? 'YES' : 'NO'} | CAPPED=${snap.best.lookaheadCapped ? 'YES' : 'NO'}`
+            : `TARGET_INFO_GAIN=${Math.round((Number(snap.best.targetInfoGain) || 0) * 100)}% | TARGET_HIT_P=${Math.round((Number(snap.best.targetHitProbability) || 0) * 100)}% | DEPTH=${snap.best.endgameOptimal ? 'OPTIMAL' : (Number(snap.best.adaptiveDepth) || 0)} | EXPECTED_DIGS_LEFT=${expectedDigsText} | EXPECTED_LEFT=${Number(snap.best.expectedRemainingTargets) || 0} | ENDGAME_OPTIMAL=${snap.best.endgameOptimal ? 'YES' : 'NO'} | ENDGAME_STATES=${Number(snap.best.endgameStateCount) || 0} | CAPPED=${snap.best.lookaheadCapped ? 'YES' : 'NO'}`
           : `EXPECTED_ELIMINATION=${Math.round((Number(snap.best.expectedElimination) || 0) * 100)}%`
 
         lines.push(
           `  NEXT: ${indexLabel(idx, gridSize)} | ${info} | FOLLOWED_NEXT=${followed ? 'YES' : 'NO'} | VERDICT=${verdict}${observed && observed.order > after ? ` | DUG_AT=#${observed.order} | ACTUAL=${observed.text}` : ''}`,
         )
+
+        if (
+          Number.isFinite(Number(snap.best.bestDirectAlternativeIndex)) &&
+          Number(snap.best.bestDirectAlternativeIndex) !== idx
+        ) {
+          const directCost =
+            snap.best.bestDirectAlternativeExpectedDigs != null &&
+            Number.isFinite(Number(snap.best.bestDirectAlternativeExpectedDigs))
+              ? Number(snap.best.bestDirectAlternativeExpectedDigs).toFixed(2)
+              : '-'
+          lines.push(
+            `  DIRECT_ALT: ${indexLabel(Number(snap.best.bestDirectAlternativeIndex), gridSize)} | TARGET_HIT_P=${Math.round((Number(snap.best.bestDirectAlternativeProbability) || 0) * 100)}% | EXPECTED_DIGS_LEFT=${directCost}`,
+          )
+        }
       }
 
       if (snap.plan?.steps?.length) {
@@ -314,11 +334,12 @@ export function buildDigTextLog({
 
         for (const snap of sameTargetJournal) {
           const after = Number(snap.afterDigOrder) || 0
-          const expected = Number(snap.best?.expectedDigsToComplete)
           if (
-            !Number.isFinite(expected) ||
+            snap.best?.expectedDigsToComplete == null ||
             after >= completionOrder
           ) continue
+          const expected = Number(snap.best.expectedDigsToComplete)
+          if (!Number.isFinite(expected)) continue
 
           let followedAll = true
           for (let order = after + 1; order <= completionOrder; order++) {

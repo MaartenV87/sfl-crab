@@ -1165,7 +1165,7 @@ export function solveTreasures(
         // memory cost.
         const openingRecords = []
         let openingRecordsComplete = true
-        const OPENING_DEEP_CONFIG_CAP = 5000
+        const OPENING_DEEP_CONFIG_CAP = 12000
         let configurationCount = 0
         let openingNodes = 0
         let openingAborted = false
@@ -1205,7 +1205,11 @@ export function solveTreasures(
               for (const [idx, name] of cellsInConfiguration) {
                 if (!actuallyRevealedCells.has(idx)) hiddenCells.set(idx, name)
               }
-              openingRecords.push({ targetCells, cells: hiddenCells })
+              openingRecords.push({
+                targetCells,
+                cells: hiddenCells,
+                allCells: new Map(cellsInConfiguration),
+              })
             } else {
               openingRecordsComplete = false
               openingRecords.length = 0
@@ -1298,6 +1302,217 @@ export function solveTreasures(
         }
 
         if (openingAborted || configurationCount === 0) return null
+
+        // v7 target-centric feasibility filter.
+        //
+        // The target-only model is cheap, but it can keep target layouts that
+        // cannot coexist with the unrelated daily formations. Group records by
+        // remaining-target signature and ask an existential question for each
+        // layout: does ANY compatible companion configuration have at least one
+        // full-board completion? One witness is enough to keep the layout.
+        //
+        // This is intentionally NOT full enumeration. If the shared feasibility
+        // budget is exhausted, unproven layouts are retained (unknown !=
+        // impossible), so pruning stays conservative.
+        let targetFeasibilityChecked = 0
+        let targetFeasibilityRejected = 0
+        let targetFeasibilityCapped = false
+
+        if (
+          openingRecordsComplete &&
+          openingRecords.length === configurationCount &&
+          openingRecords.length <= OPENING_DEEP_CONFIG_CAP
+        ) {
+          const nonTargetGroups = probabilityGroups.filter(
+            group => !targetKeys.has(group.key),
+          )
+          const revealedEntries = [...revealedTreasureName]
+          const crabNeighbourIndexes = [...revealedCrab].map(idx => {
+            const x = idx % gridSize
+            const y = Math.floor(idx / gridSize)
+            return [[1, 0], [-1, 0], [0, 1], [0, -1]]
+              .map(([dx, dy]) => [x + dx, y + dy])
+              .filter(([nx, ny]) => inBounds(nx, ny))
+              .map(([nx, ny]) => ny * gridSize + nx)
+          })
+
+          let feasibilityNodes = 0
+          const FEASIBILITY_NODE_CAP =
+            openingRecords.length <= 500 ? 350000 :
+              openingRecords.length <= 3000 ? 220000 : 140000
+
+          const recordHasCompletion = record => {
+            const occupiedFeasible = new Set()
+            const feasibleNames = new Map()
+
+            for (const plots of confirmedPlacements) {
+              for (const [idx, name] of plots) {
+                occupiedFeasible.add(idx)
+                feasibleNames.set(idx, name)
+              }
+            }
+            for (const [idx, name] of record.allCells) {
+              occupiedFeasible.add(idx)
+              feasibleNames.set(idx, name)
+            }
+
+            const revealCovered = (idx, name) =>
+              feasibleNames.has(idx) &&
+              namesMatch(feasibleNames.get(idx), name)
+
+            const allRevealsCoveredFeasible = () =>
+              revealedEntries.every(([idx, name]) => revealCovered(idx, name))
+
+            const allCrabsSatisfiedFeasible = () =>
+              crabNeighbourIndexes.every(neighbours =>
+                neighbours.some(idx => occupiedFeasible.has(idx))
+              )
+
+            const placementFits = plots =>
+              ![...plots.keys()].some(idx => occupiedFeasible.has(idx))
+
+            const remainingCanCover = (groupIndex, startPlacement, left, predicate) => {
+              for (let gi = groupIndex; gi < nonTargetGroups.length; gi++) {
+                const group = nonTargetGroups[gi]
+                const from = gi === groupIndex && left > 0 ? startPlacement : 0
+                if (gi === groupIndex && left === 0) continue
+                for (let pi = from; pi < group.placements.length; pi++) {
+                  const plots = group.placements[pi]
+                  if (!placementFits(plots)) continue
+                  if (predicate(plots)) return true
+                }
+              }
+              return false
+            }
+
+            const feasibleRemainder = (groupIndex, startPlacement, left) => {
+              for (const [idx, name] of revealedEntries) {
+                if (revealCovered(idx, name)) continue
+                if (!remainingCanCover(
+                  groupIndex,
+                  startPlacement,
+                  left,
+                  plots => namesMatch(plots.get(idx), name),
+                )) return false
+              }
+
+              for (const neighbours of crabNeighbourIndexes) {
+                if (neighbours.some(idx => occupiedFeasible.has(idx))) continue
+                if (!remainingCanCover(
+                  groupIndex,
+                  startPlacement,
+                  left,
+                  plots => neighbours.some(idx => plots.has(idx)),
+                )) return false
+              }
+              return true
+            }
+
+            let found = false
+            let capped = false
+
+            const search = (groupIndex, startPlacement, left) => {
+              if (found || capped) return
+              feasibilityNodes += 1
+              if (feasibilityNodes > FEASIBILITY_NODE_CAP) {
+                capped = true
+                targetFeasibilityCapped = true
+                return
+              }
+
+              if (groupIndex >= nonTargetGroups.length) {
+                if (allRevealsCoveredFeasible() && allCrabsSatisfiedFeasible()) {
+                  found = true
+                }
+                return
+              }
+
+              if (!feasibleRemainder(groupIndex, startPlacement, left)) return
+
+              const group = nonTargetGroups[groupIndex]
+              if (left === 0) {
+                search(
+                  groupIndex + 1,
+                  0,
+                  nonTargetGroups[groupIndex + 1]?.need ?? 0,
+                )
+                return
+              }
+
+              for (let pi = startPlacement; pi < group.placements.length; pi++) {
+                if (found || capped) return
+                const plots = group.placements[pi]
+                const keys = [...plots.keys()]
+                if (keys.some(idx => occupiedFeasible.has(idx))) continue
+
+                for (const [idx, name] of plots) {
+                  occupiedFeasible.add(idx)
+                  feasibleNames.set(idx, name)
+                }
+                search(groupIndex, pi + 1, left - 1)
+                for (const idx of keys) {
+                  occupiedFeasible.delete(idx)
+                  feasibleNames.delete(idx)
+                }
+              }
+            }
+
+            if (!nonTargetGroups.length) {
+              found = allRevealsCoveredFeasible() && allCrabsSatisfiedFeasible()
+            } else {
+              search(0, 0, nonTargetGroups[0].need)
+            }
+
+            return capped ? null : found
+          }
+
+          const recordsByTargetSignature = new Map()
+          for (const record of openingRecords) {
+            const signature = record.targetCells.join(',')
+            if (!recordsByTargetSignature.has(signature)) {
+              recordsByTargetSignature.set(signature, [])
+            }
+            recordsByTargetSignature.get(signature).push(record)
+          }
+
+          const keptSignatures = new Set()
+          for (const [signature, records] of recordsByTargetSignature) {
+            if (targetFeasibilityCapped) {
+              keptSignatures.add(signature)
+              continue
+            }
+
+            let layoutFeasible = false
+            let layoutUnknown = false
+            for (const record of records) {
+              const result = recordHasCompletion(record)
+              if (result === null) {
+                layoutUnknown = true
+                break
+              }
+              if (result) {
+                layoutFeasible = true
+                break
+              }
+            }
+
+            if (layoutFeasible || layoutUnknown) {
+              keptSignatures.add(signature)
+            } else {
+              targetFeasibilityRejected += 1
+            }
+            targetFeasibilityChecked += 1
+          }
+
+          if (keptSignatures.size > 0) {
+            const feasibleRecords = openingRecords.filter(record =>
+              keptSignatures.has(record.targetCells.join(','))
+            )
+            openingRecords.length = 0
+            openingRecords.push(...feasibleRecords)
+            configurationCount = feasibleRecords.length
+          }
+        }
 
         const deepTargetModel =
           openingRecordsComplete &&
@@ -1510,6 +1725,31 @@ export function solveTreasures(
             item.openingTargetLayoutCount = openingLayoutCount
             item.targetHitProbability = stats.hit
             item.targetInfoGain = stats.info
+            item.configurationTargetHitProbability =
+              openingRecords.length > 0
+                ? openingRecords.filter(record =>
+                    record.targetCells.includes(idx)
+                  ).length / openingRecords.length
+                : 0
+
+            let companion = 0
+            item.outcomes = [...stats.buckets.entries()]
+              .map(([outcome, probability]) => {
+                if (
+                  outcome.startsWith('treasure:') &&
+                  outcome !== `treasure:${normalizedProbabilityTarget}`
+                ) companion += probability
+                return {
+                  outcome,
+                  probability,
+                  count: probability * openingRecords.length,
+                }
+              })
+              .sort((a, b) =>
+                b.probability - a.probability ||
+                a.outcome.localeCompare(b.outcome)
+              )
+            item.companionProbability = companion
           }
 
           const searchDepth =
@@ -1703,6 +1943,12 @@ export function solveTreasures(
             a.index - b.index
           )
 
+          for (const item of ranking) {
+            item.targetFeasibilityChecked = targetFeasibilityChecked
+            item.targetFeasibilityRejected = targetFeasibilityRejected
+            item.targetFeasibilityCapped = targetFeasibilityCapped
+          }
+
           const bestDirectOpening = [...ranking]
             .filter(item => item.targetHitProbability > 0)
             .sort((a, b) =>
@@ -1724,10 +1970,19 @@ export function solveTreasures(
           return {
             configurationCount,
             targetLayoutCount: openingLayoutCount,
+            targetFeasibilityChecked,
+            targetFeasibilityRejected,
+            targetFeasibilityCapped,
             targetProbabilities: openingTargetProbabilities,
             ranking,
             best: ranking[0] ?? null,
           }
+        }
+
+        for (const item of ranking) {
+          item.targetFeasibilityChecked = targetFeasibilityChecked
+          item.targetFeasibilityRejected = targetFeasibilityRejected
+          item.targetFeasibilityCapped = targetFeasibilityCapped
         }
 
         ranking.sort((a, b) => {
@@ -1749,6 +2004,10 @@ export function solveTreasures(
 
         return {
           configurationCount,
+          targetLayoutCount: openingLayoutCount,
+          targetFeasibilityChecked,
+          targetFeasibilityRejected,
+          targetFeasibilityCapped,
           targetProbabilities: openingTargetProbabilities,
           ranking,
           best: ranking[0] ?? null,
@@ -2644,6 +2903,168 @@ export function solveTreasures(
               : 1
             candidate.adaptiveScore = -candidate.expectedDigsToComplete
             candidate.lookaheadCapped = adaptiveCapped
+          }
+
+          // v7 exact last-target endgame.
+          //
+          // With one target left and a small number of target layouts, solve
+          // the decision problem to completion instead of using a depth/node
+          // capped horizon. A state is fully described by the still-compatible
+          // full solutions; past non-target digs need not be memoized because
+          // their observed information is already encoded by that subset.
+          //
+          // Useless actions (same posterior state, no target hit) are skipped,
+          // and actions that induce the same posterior partition are evaluated
+          // only once per state. This makes the 4-layout style endgames from
+          // real logs tiny and gives a proof-quality expected dig count.
+          const useOptimalEndgame =
+            targetRemainingCount === 1 &&
+            layoutCount <= 12 &&
+            globalSolutionCount <= 750
+
+          if (useOptimalEndgame) {
+            const targetOutcomeCode =
+              outcomeCodeByName.get(`treasure:${normalizedProbabilityTarget}`)
+            const allActions = smartDigRanking
+              .map(item => item.index)
+              .filter(idx => !actuallyRevealedCells.has(idx))
+              .sort((a, b) => a - b)
+            const optimalMemo = new Map()
+            let optimalStates = 0
+
+            const posteriorWeight = indexes => {
+              let sum = 0
+              for (const si of indexes) sum += solutionWeights[si] ?? 0
+              return sum
+            }
+
+            const directRolloutCost = indexes => {
+              const total = posteriorWeight(indexes)
+              if (total <= 0) return 0
+              const targetMass = new Map()
+              for (const si of indexes) {
+                const targetIdx = targetSolutionCells[si]?.[0]
+                if (!Number.isFinite(targetIdx)) continue
+                targetMass.set(
+                  targetIdx,
+                  (targetMass.get(targetIdx) ?? 0) +
+                    (solutionWeights[si] ?? 0),
+                )
+              }
+              const order = [...targetMass.entries()]
+                .sort((a, b) => b[1] - a[1] || a[0] - b[0])
+              let expected = 0
+              for (let i = 0; i < order.length; i++) {
+                expected += (order[i][1] / total) * (i + 1)
+              }
+              return expected
+            }
+
+            const partitionForAction = (indexes, action) => {
+              const groups = new Map()
+              for (const si of indexes) {
+                const code = solutionOutcomeCodes[si]?.[action] ?? 0
+                if (!groups.has(code)) groups.set(code, [])
+                groups.get(code).push(si)
+              }
+              return groups
+            }
+
+            const optimalCost = indexes => {
+              if (!indexes.length) return 0
+              const key = indexes.join(',')
+              if (optimalMemo.has(key)) return optimalMemo.get(key)
+              optimalStates += 1
+
+              let best = directRolloutCost(indexes)
+              const total = posteriorWeight(indexes)
+              if (total <= 0 || best <= 1 + 1e-12) {
+                optimalMemo.set(key, best)
+                return best
+              }
+
+              const seenPartitions = new Set()
+              for (const action of allActions) {
+                const groups = partitionForAction(indexes, action)
+                const targetBranch = targetOutcomeCode == null
+                  ? null
+                  : groups.get(targetOutcomeCode)
+                const targetMass = targetBranch
+                  ? posteriorWeight(targetBranch)
+                  : 0
+
+                // One unchanged non-target bucket and no possible hit: this dig
+                // cannot improve the state.
+                if (groups.size === 1 && targetMass <= 1e-12) continue
+
+                const nonTargetGroups = []
+                for (const [code, branch] of groups) {
+                  if (code === targetOutcomeCode) continue
+                  if (branch.length) nonTargetGroups.push(branch)
+                }
+
+                // Canonicalize by posterior subsets, not raw outcome labels:
+                // different cells that split the state identically are the
+                // same decision for the one-target objective.
+                const partitionKey = nonTargetGroups
+                  .map(branch => branch.join(','))
+                  .sort()
+                  .join('|')
+                if (seenPartitions.has(partitionKey)) continue
+                seenPartitions.add(partitionKey)
+
+                let future = 0
+                for (const branch of nonTargetGroups) {
+                  const p = posteriorWeight(branch) / total
+                  if (p <= 0) continue
+                  // Every non-target branch is a strict posterior reduction
+                  // for useful actions, so recursion cannot cycle.
+                  if (branch.length === indexes.length) {
+                    future = Infinity
+                    break
+                  }
+                  future += p * optimalCost(branch)
+                }
+
+                const cost = 1 + future
+                if (cost < best) best = cost
+              }
+
+              optimalMemo.set(key, best)
+              return best
+            }
+
+            const rootTotal = posteriorWeight(initialSolutions)
+            for (const candidate of smartDigRanking) {
+              const firstIdx = candidate.index
+              if (!allActions.includes(firstIdx)) continue
+
+              const groups = partitionForAction(initialSolutions, firstIdx)
+              let expectedFuture = 0
+              for (const [code, branch] of groups) {
+                if (code === targetOutcomeCode) continue
+                const p = posteriorWeight(branch) / rootTotal
+                if (p <= 0) continue
+                if (branch.length === initialSolutions.length) {
+                  expectedFuture = Infinity
+                  break
+                }
+                expectedFuture += p * optimalCost(branch)
+              }
+
+              candidate.expectedDigsToComplete = 1 + expectedFuture
+              candidate.adaptiveScore = -candidate.expectedDigsToComplete
+              candidate.lookaheadCapped = false
+              candidate.endgameOptimal = true
+              candidate.endgameStateCount = optimalStates
+              candidate.adaptiveDepth = 0
+            }
+
+            for (const candidate of smartDigRanking) {
+              if (candidate.endgameOptimal) {
+                candidate.endgameStateCount = optimalStates
+              }
+            }
           }
 
           smartDigRanking.sort((a, b) =>
