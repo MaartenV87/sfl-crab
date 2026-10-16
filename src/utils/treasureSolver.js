@@ -2963,10 +2963,13 @@ export function solveTreasures(
           // and actions that induce the same posterior partition are evaluated
           // only once per state. This makes the 4-layout style endgames from
           // real logs tiny and gives a proof-quality expected dig count.
+          const optimalSolutionCap =
+            layoutCount <= 4 ? 2500 :
+              layoutCount <= 8 ? 1200 : 750
           const useOptimalEndgame =
             targetRemainingCount === 1 &&
             layoutCount <= 12 &&
-            globalSolutionCount <= 750
+            globalSolutionCount <= optimalSolutionCap
 
           if (useOptimalEndgame) {
             const targetOutcomeCode =
@@ -3129,6 +3132,47 @@ export function solveTreasures(
                 (b.expectedDigsToComplete ?? Infinity) ||
               a.index - b.index
             )[0] ?? null
+
+          // Exact-but-capped horizon search is much more trustworthy than the
+          // reduced model, but still not proof-quality. Require a small margin
+          // before sacrificing a stronger direct hit. Fully optimal endgames
+          // never use this guard.
+          const exactPreferred = smartDigRanking[0] ?? null
+          if (
+            exactPreferred &&
+            bestDirectExact &&
+            !exactPreferred.endgameOptimal &&
+            exactPreferred.lookaheadCapped &&
+            exactPreferred.index !== bestDirectExact.index &&
+            Number.isFinite(exactPreferred.expectedDigsToComplete) &&
+            Number.isFinite(bestDirectExact.expectedDigsToComplete)
+          ) {
+            const exactMargin = 0.20
+            const modelAdvantage =
+              bestDirectExact.expectedDigsToComplete -
+              exactPreferred.expectedDigsToComplete
+            exactPreferred.robustCostMargin = exactMargin
+            exactPreferred.robustCostAdvantage = modelAdvantage
+
+            if (modelAdvantage < exactMargin - 1e-12) {
+              bestDirectExact.robustFallbackUsed = true
+              bestDirectExact.robustReason = 'capped-exact-cost-margin'
+              bestDirectExact.robustCostMargin = exactMargin
+              bestDirectExact.robustCostAdvantage = modelAdvantage
+              bestDirectExact.modelPreferredIndex = exactPreferred.index
+              bestDirectExact.modelPreferredProbability =
+                exactPreferred.targetHitProbability
+              bestDirectExact.modelPreferredExpectedDigs =
+                exactPreferred.expectedDigsToComplete
+
+              const directPosition = smartDigRanking.indexOf(bestDirectExact)
+              if (directPosition > 0) {
+                smartDigRanking.splice(directPosition, 1)
+                smartDigRanking.unshift(bestDirectExact)
+              }
+            }
+          }
+
           if (smartDigRanking[0] && bestDirectExact) {
             smartDigRanking[0].bestDirectAlternativeIndex = bestDirectExact.index
             smartDigRanking[0].bestDirectAlternativeProbability =
