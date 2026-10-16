@@ -1,10 +1,10 @@
 // usePredictionEngine.js — reactive wrapper around solveTreasures.
 //
-// Watches tiles / patternKeys / enabled and recomputes guaranteed treasure
-// locations off the main thread via requestIdleCallback (with a setTimeout
-// fallback), so a heavy solve never blocks the UI.
+// Heavy probability solving runs in a dedicated Web Worker during normal app
+// usage so mobile and desktop UI remain responsive. Synchronous solving is
+// retained only for explicit sync/GIF-export flows.
 
-import { ref, watch } from 'vue'
+import { ref, watch, onScopeDispose } from 'vue'
 import { solveTreasures } from '@/utils/treasureSolver.js'
 
 export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { gridSize = 10, syncRef = null, probabilityRef = null, probabilityTargetRef = null, performanceProfileRef = null } = {}) {
@@ -30,26 +30,16 @@ export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { grid
   const targetRemainingCount = ref(0)
   const targetLayoutCount = ref(0)
 
-  const schedule = (typeof window !== 'undefined' && window.requestIdleCallback)
-    ? window.requestIdleCallback.bind(window)
-    : (cb => setTimeout(cb, 0))
-  const cancel = (typeof window !== 'undefined' && window.cancelIdleCallback)
-    ? window.cancelIdleCallback.bind(window)
-    : clearTimeout
+  let worker = null
+  let requestId = 0
 
-  let idleId = null
+  const currentOptions = () => ({
+    includeProbabilities: Boolean(probabilityRef?.value),
+    probabilityTarget: probabilityTargetRef?.value ?? '',
+    performanceProfile: performanceProfileRef?.value ?? 'desktop',
+  })
 
-  function runSolve() {
-    const result = solveTreasures(
-      tilesRef.value,
-      patternKeysRef.value,
-      gridSize,
-      {
-        includeProbabilities: Boolean(probabilityRef?.value),
-        probabilityTarget: probabilityTargetRef?.value ?? '',
-        performanceProfile: performanceProfileRef?.value ?? 'desktop',
-      },
-    )
+  function applyResult(result) {
     guaranteed.value = result.guaranteed
     guaranteedSlugs.value = result.guaranteedSlugs
     guaranteedCandidates.value = result.guaranteedCandidates
@@ -73,45 +63,117 @@ export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { grid
     targetLayoutCount.value = result.targetLayoutCount ?? 0
   }
 
+  function clearResult() {
+    guaranteed.value = new Set()
+    guaranteedSlugs.value = new Map()
+    guaranteedCandidates.value = new Map()
+    guaranteedFormationCounts.value = new Map()
+    remainingCounts.value = new Map()
+    remainingRegions.value = new Map()
+    possibleTreasureCells.value = new Set()
+    probabilities.value = new Map()
+    targetProbabilities.value = new Map()
+    globalSolutionCount.value = 0
+    probabilityComplete.value = true
+    probabilityReason.value = null
+    probabilityMode.value = 'none'
+    smartDig.value = null
+    smartDigRanking.value = []
+    targetPlan.value = null
+    targetComplete.value = false
+    targetRequiredCount.value = 0
+    targetFoundCount.value = 0
+    targetRemainingCount.value = 0
+    targetLayoutCount.value = 0
+  }
+
+  function stopWorker() {
+    if (worker) {
+      worker.terminate()
+      worker = null
+    }
+  }
+
+  function runSolveSync() {
+    stopWorker()
+    requestId += 1
+    applyResult(
+      solveTreasures(
+        tilesRef.value,
+        patternKeysRef.value,
+        gridSize,
+        currentOptions(),
+      ),
+    )
+  }
+
+  function runSolveWorker() {
+    stopWorker()
+    const thisRequest = ++requestId
+
+    try {
+      worker = new Worker(
+        new URL('../workers/treasureSolver.worker.js', import.meta.url),
+        { type: 'module' },
+      )
+    } catch (error) {
+      console.warn('Prediction Web Worker unavailable; using synchronous fallback.', error)
+      runSolveSync()
+      return
+    }
+
+    worker.onmessage = event => {
+      if (thisRequest !== requestId) return
+      const payload = event.data || {}
+      if (!payload.ok) {
+        console.error('Prediction worker failed:', payload.error || 'unknown error')
+        stopWorker()
+        return
+      }
+      applyResult(payload.result)
+      stopWorker()
+    }
+
+    worker.onerror = event => {
+      if (thisRequest !== requestId) return
+      console.error('Prediction worker crashed:', event.message || event)
+      stopWorker()
+    }
+
+    // Clone only plain reactive values into the worker. Arrays of tile class
+    // strings and pattern keys are structured-clone safe.
+    worker.postMessage({
+      requestId: thisRequest,
+      tiles: Array.isArray(tilesRef.value)
+        ? tilesRef.value.map(tile => Array.isArray(tile) ? [...tile] : tile)
+        : [],
+      patternKeys: Array.isArray(patternKeysRef.value)
+        ? [...patternKeysRef.value]
+        : [],
+      gridSize,
+      options: currentOptions(),
+    })
+  }
+
   function recompute() {
-    if (idleId != null) { cancel(idleId); idleId = null }
+    // Terminating the old worker genuinely aborts expensive solver work when a
+    // newer grid state arrives. requestIdleCallback could not do this because
+    // solveTreasures still ran on the UI thread once started.
+    stopWorker()
+    requestId += 1
 
     if (!enabledRef.value) {
-      guaranteed.value = new Set()
-      guaranteedSlugs.value = new Map()
-      guaranteedCandidates.value = new Map()
-      guaranteedFormationCounts.value = new Map()
-      remainingCounts.value = new Map()
-      remainingRegions.value = new Map()
-      possibleTreasureCells.value = new Set()
-      probabilities.value = new Map()
-      targetProbabilities.value = new Map()
-      globalSolutionCount.value = 0
-      probabilityComplete.value = true
-      probabilityReason.value = null
-      probabilityMode.value = 'none'
-      smartDig.value = null
-      smartDigRanking.value = []
-      targetPlan.value = null
-      targetComplete.value = false
-      targetRequiredCount.value = 0
-      targetFoundCount.value = 0
-      targetRemainingCount.value = 0
-      targetLayoutCount.value = 0
+      clearResult()
       return
     }
 
-    // Synchronous solve during GIF export so every captured frame — including
-    // the last — already has its predictions (no requestIdleCallback lag).
+    // GIF/export flows explicitly require the result before capture.
     if (syncRef?.value) {
-      runSolve()
+      runSolveSync()
       return
     }
 
-    idleId = schedule(() => {
-      idleId = null
-      runSolve()
-    })
+    runSolveWorker()
   }
 
   const sources = [tilesRef, patternKeysRef, enabledRef]
@@ -125,6 +187,11 @@ export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { grid
     recompute,
     { immediate: true, deep: true }
   )
+
+  onScopeDispose(() => {
+    stopWorker()
+    requestId += 1
+  })
 
   return { guaranteed, guaranteedSlugs, guaranteedCandidates, guaranteedFormationCounts, remainingCounts, remainingRegions, possibleTreasureCells, probabilities, targetProbabilities, globalSolutionCount, probabilityComplete, probabilityReason, probabilityMode, smartDig, smartDigRanking, targetPlan, targetComplete, targetRequiredCount, targetFoundCount, targetRemainingCount, targetLayoutCount }
 }
