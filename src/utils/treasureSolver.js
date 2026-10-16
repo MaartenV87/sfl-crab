@@ -1918,6 +1918,12 @@ export function solveTreasures(
             a.index - b.index
           )
 
+          for (const item of ranking) {
+            item.targetFeasibilityChecked = targetFeasibilityChecked
+            item.targetFeasibilityRejected = targetFeasibilityRejected
+            item.targetFeasibilityCapped = targetFeasibilityCapped
+          }
+
           const bestDirectOpening = [...ranking]
             .filter(item => item.targetHitProbability > 0)
             .sort((a, b) =>
@@ -1946,6 +1952,12 @@ export function solveTreasures(
             ranking,
             best: ranking[0] ?? null,
           }
+        }
+
+        for (const item of ranking) {
+          item.targetFeasibilityChecked = targetFeasibilityChecked
+          item.targetFeasibilityRejected = targetFeasibilityRejected
+          item.targetFeasibilityCapped = targetFeasibilityCapped
         }
 
         ranking.sort((a, b) => {
