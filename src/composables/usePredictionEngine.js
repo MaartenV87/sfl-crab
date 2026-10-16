@@ -116,14 +116,19 @@ export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { grid
     isSolving.value = true
 
     try {
+      if (typeof Worker === 'undefined') {
+        throw new Error('Web Workers are not supported by this browser')
+      }
       worker = new Worker(
         new URL('../workers/treasureSolver.worker.js', import.meta.url),
         { type: 'module' },
       )
     } catch (error) {
-      console.warn('Prediction Web Worker unavailable; using synchronous fallback.', error)
-      isSolving.value = false
       console.error('Prediction Web Worker unavailable.', error)
+      isSolving.value = false
+      clearResult()
+      probabilityComplete.value = false
+      probabilityReason.value = 'worker-unavailable'
       return
     }
 
