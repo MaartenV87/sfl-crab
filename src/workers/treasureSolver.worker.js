@@ -1,4 +1,4 @@
-import { solveTreasures } from '@/utils/treasureSolver.js'
+import { solveTreasures } from '../utils/treasureSolver.js'
 
 self.onmessage = event => {
   const { requestId, tiles, patternKeys, gridSize, options } = event.data || {}
