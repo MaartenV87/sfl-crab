@@ -1,8 +1,9 @@
 // usePredictionEngine.js — reactive wrapper around solveTreasures.
 //
 // Watches tiles / patternKeys / enabled and recomputes guaranteed treasure
-// locations off the main thread via requestIdleCallback (with a setTimeout
-// fallback), so a heavy solve never blocks the UI.
+// locations in a dedicated Web Worker. requestIdleCallback only schedules the
+// worker launch; the expensive solver itself never blocks the browser UI thread
+// when Worker support is available.
 
 import { ref, watch, onUnmounted, toRaw } from 'vue'
 import { solveTreasures } from '@/utils/treasureSolver.js'
@@ -144,35 +145,42 @@ export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { grid
       // mechanism when a new dig arrives before the previous solve finished.
       if (typeof Worker !== 'undefined') {
         const id = ++solveId
-        worker = new Worker(
+        const activeWorker = new Worker(
           new URL('../workers/predictionSolver.worker.js', import.meta.url),
           { type: 'module' },
         )
+        worker = activeWorker
         isCalculating.value = true
 
-        worker.onmessage = event => {
+        activeWorker.onmessage = event => {
           if (event.data?.id !== id) return
           if (event.data?.error) {
             console.error('Prediction worker failed:', event.data.error)
-            isCalculating.value = false
-            worker?.terminate()
-            worker = null
+            if (worker === activeWorker) {
+              isCalculating.value = false
+              worker = null
+            }
+            activeWorker.terminate()
             return
           }
           applyResult(event.data.result)
-          isCalculating.value = false
-          worker?.terminate()
-          worker = null
+          if (worker === activeWorker) {
+            isCalculating.value = false
+            worker = null
+          }
+          activeWorker.terminate()
         }
 
-        worker.onerror = event => {
+        activeWorker.onerror = event => {
           console.error('Prediction worker error:', event.message || event)
-          isCalculating.value = false
-          worker?.terminate()
-          worker = null
+          if (worker === activeWorker) {
+            isCalculating.value = false
+            worker = null
+          }
+          activeWorker.terminate()
         }
 
-        worker.postMessage({
+        activeWorker.postMessage({
           id,
           tiles: snapshotForWorker(tilesRef.value),
           patternKeys: snapshotForWorker(patternKeysRef.value),
