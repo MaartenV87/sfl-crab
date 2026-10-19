@@ -292,10 +292,13 @@ export function buildDigTextLog({
           : `EXPECTED_ELIMINATION=${Math.round((Number(snap.best.expectedElimination) || 0) * 100)}%`
 
         const robustInfo = snap.best.robustFallbackUsed
-          ? ` | ROBUST_FALLBACK=YES | ROBUST_REASON=${snap.best.robustReason || '-'} | MODEL_ADVANTAGE=${Number(snap.best.robustCostAdvantage || 0).toFixed(2)} | REQUIRED_MARGIN=${Number(snap.best.robustCostMargin || 0).toFixed(2)}`
+          ? ` | ROBUST_FALLBACK=YES | ROBUST_REASON=${snap.best.robustReason || '-'} | MODEL_ADVANTAGE=${Number(snap.best.robustCostAdvantage || 0).toFixed(2)} | REQUIRED_MARGIN=${Number(snap.best.robustCostMargin || 0).toFixed(2)} | DIRECT_P_GAP=${Math.round((Number(snap.best.directProbabilityGap) || 0) * 100)}pp`
+          : ''
+        const confidenceInfo = snap.best.decisionConfidence
+          ? ` | CONFIDENCE=${snap.best.decisionConfidence}`
           : ''
         lines.push(
-          `  NEXT: ${indexLabel(idx, gridSize)} | ${info}${robustInfo} | FOLLOWED_NEXT=${followed ? 'YES' : 'NO'} | VERDICT=${verdict}${observed && observed.order > after ? ` | DUG_AT=#${observed.order} | ACTUAL=${observed.text}` : ''}`,
+          `  NEXT: ${indexLabel(idx, gridSize)} | ${info}${confidenceInfo}${robustInfo} | FOLLOWED_NEXT=${followed ? 'YES' : 'NO'} | VERDICT=${verdict}${observed && observed.order > after ? ` | DUG_AT=#${observed.order} | ACTUAL=${observed.text}` : ''}`,
         )
 
         if (

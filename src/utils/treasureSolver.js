@@ -1993,15 +1993,27 @@ export function solveTreasures(
             const modelAdvantage =
               bestDirectOpening.expectedDigsToComplete -
               modelPreferredOpening.expectedDigsToComplete
+            const probabilityGap = Math.max(
+              0,
+              bestDirectOpening.targetHitProbability -
+                modelPreferredOpening.targetHitProbability,
+            )
+            const probabilityRegretMargin = probabilityGap > 0.30 ? 0.25 :
+              probabilityGap > 0.20 ? 0.15 :
+                probabilityGap > 0.10 ? 0.08 : 0
+            const requiredMargin =
+              approximateCostMargin + probabilityRegretMargin
 
-            modelPreferredOpening.robustCostMargin = approximateCostMargin
+            modelPreferredOpening.robustCostMargin = requiredMargin
             modelPreferredOpening.robustCostAdvantage = modelAdvantage
+            modelPreferredOpening.directProbabilityGap = probabilityGap
 
-            if (modelAdvantage < approximateCostMargin - 1e-12) {
+            if (modelAdvantage < requiredMargin - 1e-12) {
               bestDirectOpening.robustFallbackUsed = true
-              bestDirectOpening.robustReason = 'approximate-cost-margin'
-              bestDirectOpening.robustCostMargin = approximateCostMargin
+              bestDirectOpening.robustReason = 'approximate-regret-margin'
+              bestDirectOpening.robustCostMargin = requiredMargin
               bestDirectOpening.robustCostAdvantage = modelAdvantage
+              bestDirectOpening.directProbabilityGap = probabilityGap
               bestDirectOpening.modelPreferredIndex = modelPreferredOpening.index
               bestDirectOpening.modelPreferredProbability =
                 modelPreferredOpening.targetHitProbability
@@ -2014,6 +2026,15 @@ export function solveTreasures(
                 ranking.unshift(bestDirectOpening)
               }
             }
+          }
+
+          for (const item of ranking) {
+            item.decisionConfidence =
+              targetFeasibilityCapped || openingLookaheadCapped
+                ? 'LOW'
+                : openingLayoutCount <= 100
+                  ? 'MEDIUM'
+                  : 'LOW'
           }
 
           if (ranking[0] && bestDirectOpening) {
@@ -3135,6 +3156,152 @@ export function solveTreasures(
             }
           }
 
+          // v9: solve very small TWO-target exact states to completion too.
+          // Unlike the one-target solver above, terminal state is based on the
+          // number of target outcomes observed in the lookahead. This matches
+          // what the player actually knows: every target hit is observable.
+          const multiTargetSolutionCap = mobilePerformance ? 180 : 450
+          const useOptimalTwoTargetEndgame =
+            targetRemainingCount === 2 &&
+            layoutCount <= 6 &&
+            globalSolutionCount <= multiTargetSolutionCap
+
+          if (useOptimalTwoTargetEndgame) {
+            const targetOutcomeCode =
+              outcomeCodeByName.get(`treasure:${normalizedProbabilityTarget}`)
+            const allActions = smartDigRanking
+              .map(item => item.index)
+              .filter(idx => !actuallyRevealedCells.has(idx))
+              .sort((a, b) => a - b)
+            const stateWeights = solutionWeights
+            const stateWeight = indexes => {
+              let sum = 0
+              for (const si of indexes) sum += stateWeights[si] ?? 0
+              return sum
+            }
+            const partitionForAction = (indexes, action) => {
+              const groups = new Map()
+              for (const si of indexes) {
+                const code = solutionOutcomeCodes[si]?.[action] ?? 0
+                if (!groups.has(code)) groups.set(code, [])
+                groups.get(code).push(si)
+              }
+              return groups
+            }
+
+            const memo = new Map()
+            let stateCount = 0
+            let aborted = false
+            const STATE_CAP = mobilePerformance ? 12000 : 40000
+
+            const greedyFinish = (indexes, dug, hits) => {
+              if (hits >= 2) return 0
+              const total = stateWeight(indexes)
+              if (total <= 0) return 0
+              const marginal = new Map()
+              for (const si of indexes) {
+                const w = stateWeights[si] ?? 0
+                for (const idx of targetSolutionCells[si] || []) {
+                  if (dug.has(idx)) continue
+                  marginal.set(idx, (marginal.get(idx) ?? 0) + w)
+                }
+              }
+              const order = [...marginal.entries()]
+                .sort((a,b) => b[1] - a[1] || a[0] - b[0])
+                .map(([idx]) => idx)
+              if (!order.length) return 0
+
+              // Concrete non-adaptive direct-target rollout. Simulate each
+              // compatible world and stop after the required remaining hits.
+              let expected = 0
+              for (const si of indexes) {
+                const normalized = (stateWeights[si] ?? 0) / total
+                const targets = new Set(targetSolutionCells[si] || [])
+                let found = hits
+                let used = 0
+                for (const idx of order) {
+                  used += 1
+                  if (targets.has(idx)) found += 1
+                  if (found >= 2) break
+                }
+                expected += normalized * used
+              }
+              return expected
+            }
+
+            const solveOptimal = (indexes, dug, hits) => {
+              if (hits >= 2 || !indexes.length) return 0
+              const key =
+                `${hits}|${indexes.join(',')}|${[...dug].sort((a,b)=>a-b).join(',')}`
+              if (memo.has(key)) return memo.get(key)
+
+              stateCount += 1
+              if (stateCount > STATE_CAP) {
+                aborted = true
+                return greedyFinish(indexes, dug, hits)
+              }
+
+              const total = stateWeight(indexes)
+              if (total <= 0) return 0
+              let best = greedyFinish(indexes, dug, hits)
+
+              for (const action of allActions) {
+                if (dug.has(action)) continue
+                const groups = partitionForAction(indexes, action)
+                if (groups.size === 1) {
+                  const only = [...groups.entries()][0]
+                  if (only[0] !== targetOutcomeCode) continue
+                }
+
+                const nextDug = new Set(dug)
+                nextDug.add(action)
+                let future = 0
+                for (const [code, branch] of groups) {
+                  const p = stateWeight(branch) / total
+                  if (p <= 0) continue
+                  const nextHits = hits + (code === targetOutcomeCode ? 1 : 0)
+                  future += p * solveOptimal(branch, nextDug, nextHits)
+                }
+                best = Math.min(best, 1 + future)
+                if (aborted) break
+              }
+
+              memo.set(key, best)
+              return best
+            }
+
+            const rootWeight = stateWeight(initialSolutions)
+            const candidateCosts = new Map()
+            for (const candidate of smartDigRanking) {
+              if (aborted) break
+              const firstIdx = candidate.index
+              if (!allActions.includes(firstIdx)) continue
+              const groups = partitionForAction(initialSolutions, firstIdx)
+              const dug = new Set([firstIdx])
+              let future = 0
+              for (const [code, branch] of groups) {
+                const p = stateWeight(branch) / rootWeight
+                if (p <= 0) continue
+                const hits = code === targetOutcomeCode ? 1 : 0
+                future += p * solveOptimal(branch, dug, hits)
+              }
+              candidateCosts.set(candidate.index, 1 + future)
+            }
+
+            if (!aborted && candidateCosts.size) {
+              for (const candidate of smartDigRanking) {
+                const cost = candidateCosts.get(candidate.index)
+                if (!Number.isFinite(cost)) continue
+                candidate.expectedDigsToComplete = cost
+                candidate.adaptiveScore = -cost
+                candidate.lookaheadCapped = false
+                candidate.endgameOptimal = true
+                candidate.endgameStateCount = stateCount
+                candidate.adaptiveDepth = 0
+              }
+            }
+          }
+
           smartDigRanking.sort((a, b) =>
             (a.expectedDigsToComplete ?? Infinity) -
               (b.expectedDigsToComplete ?? Infinity) ||
@@ -3152,32 +3319,44 @@ export function solveTreasures(
               a.index - b.index
             )[0] ?? null
 
-          // Exact-but-capped horizon search is much more trustworthy than the
-          // reduced model, but still not proof-quality. Require a small margin
-          // before sacrificing a stronger direct hit. Fully optimal endgames
-          // never use this guard.
+          // v9 regret control applies to EVERY non-optimal exact state, not
+          // only capped searches. Exact board enumeration does not make a
+          // finite-horizon decision tree proof-quality. A tiny expected-cost
+          // edge is not enough to sacrifice a much stronger direct hit.
           const exactPreferred = smartDigRanking[0] ?? null
           if (
             exactPreferred &&
             bestDirectExact &&
             !exactPreferred.endgameOptimal &&
-            exactPreferred.lookaheadCapped &&
             exactPreferred.index !== bestDirectExact.index &&
             Number.isFinite(exactPreferred.expectedDigsToComplete) &&
             Number.isFinite(bestDirectExact.expectedDigsToComplete)
           ) {
-            const exactMargin = 0.20
+            const baseExactMargin = exactPreferred.lookaheadCapped ? 0.25 : 0.15
+            const probabilityGap = Math.max(
+              0,
+              bestDirectExact.targetHitProbability -
+                exactPreferred.targetHitProbability,
+            )
+            const probabilityRegretMargin = probabilityGap > 0.30 ? 0.25 :
+              probabilityGap > 0.20 ? 0.15 :
+                probabilityGap > 0.10 ? 0.08 : 0
+            const exactMargin = baseExactMargin + probabilityRegretMargin
             const modelAdvantage =
               bestDirectExact.expectedDigsToComplete -
               exactPreferred.expectedDigsToComplete
             exactPreferred.robustCostMargin = exactMargin
             exactPreferred.robustCostAdvantage = modelAdvantage
+            exactPreferred.directProbabilityGap = probabilityGap
 
             if (modelAdvantage < exactMargin - 1e-12) {
               bestDirectExact.robustFallbackUsed = true
-              bestDirectExact.robustReason = 'capped-exact-cost-margin'
+              bestDirectExact.robustReason = exactPreferred.lookaheadCapped
+                ? 'capped-exact-regret-margin'
+                : 'exact-regret-margin'
               bestDirectExact.robustCostMargin = exactMargin
               bestDirectExact.robustCostAdvantage = modelAdvantage
+              bestDirectExact.directProbabilityGap = probabilityGap
               bestDirectExact.modelPreferredIndex = exactPreferred.index
               bestDirectExact.modelPreferredProbability =
                 exactPreferred.targetHitProbability
@@ -3190,6 +3369,16 @@ export function solveTreasures(
                 smartDigRanking.unshift(bestDirectExact)
               }
             }
+          }
+
+          for (const item of smartDigRanking) {
+            item.decisionConfidence = item.endgameOptimal
+              ? 'OPTIMAL'
+              : item.lookaheadCapped
+                ? 'MEDIUM'
+                : layoutCount <= 50
+                  ? 'HIGH'
+                  : 'MEDIUM'
           }
 
           if (smartDigRanking[0] && bestDirectExact) {

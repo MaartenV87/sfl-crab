@@ -125,6 +125,7 @@
       <div class="font-semibold">
         Recommended next dig: {{ cellLabel(smartDig.index) }}
         <span class="opacity-60 font-normal">· {{ solverPerformanceProfile === 'mobile' ? 'Mobile solver' : 'Desktop solver' }}</span>
+        <span v-if="smartDig.decisionConfidence" class="opacity-60 font-normal">· {{ smartDig.decisionConfidence }}</span>
       </div>
       <div class="text-[0.68rem] opacity-80">
         {{ Math.round((smartDig.targetHitProbability ?? 0) * 100) }}% direct target chance
@@ -138,7 +139,10 @@
       <div class="text-[0.62rem] opacity-65 mt-0.5">
         Follow NEXT first. When enough target layouts are known, NEXT minimizes expected digs until all remaining selected targets are found.
         <template v-if="smartDig.robustFallbackUsed">
-          A robustness guard preferred the stronger direct target because the modelled information advantage was too small to trust.
+          A robustness guard preferred the stronger direct target because the modelled information advantage was too small to trust
+          <template v-if="smartDig.directProbabilityGap > 0">
+            ({{ Math.round(smartDig.directProbabilityGap * 100) }} percentage-point direct-hit gap).
+          </template>
         </template>
         <template v-if="smartDig.endgameOptimal">
           This endgame is solved to completion, not horizon-estimated.

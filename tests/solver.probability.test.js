@@ -161,6 +161,7 @@ describe('treasure probability enumeration', () => {
     expect(result.smartDig.targetHitProbability).toBeCloseTo(0.5)
     expect(result.smartDig.expectedDigsToComplete).toBeCloseTo(1.5)
     expect(result.smartDig.endgameOptimal).toBe(true)
+    expect(result.smartDig.decisionConfidence).toBe('OPTIMAL')
     expect(result.smartDig.lookaheadCapped).toBe(false)
     expect(result.smartDig.endgameStateCount).toBeGreaterThan(0)
   })
@@ -222,6 +223,7 @@ describe('treasure probability enumeration', () => {
     expect(result.smartDig.expectedDigsToComplete).toBeGreaterThan(0)
     expect(result.smartDig.probabilityBasis).toBe('unique-target-layouts-reduced')
     expect(result.smartDig.openingTargetLayoutCount).toBeGreaterThan(0)
+    expect(['LOW', 'MEDIUM']).toContain(result.smartDig.decisionConfidence)
     expect(result.smartDig.targetFeasibilityChecked).toBeGreaterThanOrEqual(0)
     expect(result.smartDig.targetFeasibilityRejected).toBeGreaterThanOrEqual(0)
     expect(result.smartDig.expectedRemainingTargets).toBeGreaterThanOrEqual(0)
@@ -252,6 +254,7 @@ describe('treasure probability enumeration', () => {
       expect(result.smartDig.modelPreferredIndex).not.toBeNull()
       expect(result.smartDig.robustCostAdvantage)
         .toBeLessThan(result.smartDig.robustCostMargin)
+      expect(result.smartDig.directProbabilityGap).toBeGreaterThanOrEqual(0)
     }
   })
 
