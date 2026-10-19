@@ -1993,15 +1993,27 @@ export function solveTreasures(
             const modelAdvantage =
               bestDirectOpening.expectedDigsToComplete -
               modelPreferredOpening.expectedDigsToComplete
+            const probabilityGap = Math.max(
+              0,
+              bestDirectOpening.targetHitProbability -
+                modelPreferredOpening.targetHitProbability,
+            )
+            const probabilityRegretMargin = probabilityGap > 0.30 ? 0.25 :
+              probabilityGap > 0.20 ? 0.15 :
+                probabilityGap > 0.10 ? 0.08 : 0
+            const requiredMargin =
+              approximateCostMargin + probabilityRegretMargin
 
-            modelPreferredOpening.robustCostMargin = approximateCostMargin
+            modelPreferredOpening.robustCostMargin = requiredMargin
             modelPreferredOpening.robustCostAdvantage = modelAdvantage
+            modelPreferredOpening.directProbabilityGap = probabilityGap
 
-            if (modelAdvantage < approximateCostMargin - 1e-12) {
+            if (modelAdvantage < requiredMargin - 1e-12) {
               bestDirectOpening.robustFallbackUsed = true
-              bestDirectOpening.robustReason = 'approximate-cost-margin'
-              bestDirectOpening.robustCostMargin = approximateCostMargin
+              bestDirectOpening.robustReason = 'approximate-regret-margin'
+              bestDirectOpening.robustCostMargin = requiredMargin
               bestDirectOpening.robustCostAdvantage = modelAdvantage
+              bestDirectOpening.directProbabilityGap = probabilityGap
               bestDirectOpening.modelPreferredIndex = modelPreferredOpening.index
               bestDirectOpening.modelPreferredProbability =
                 modelPreferredOpening.targetHitProbability
@@ -2014,6 +2026,15 @@ export function solveTreasures(
                 ranking.unshift(bestDirectOpening)
               }
             }
+          }
+
+          for (const item of ranking) {
+            item.decisionConfidence =
+              targetFeasibilityCapped || openingLookaheadCapped
+                ? 'LOW'
+                : openingLayoutCount <= 100
+                  ? 'MEDIUM'
+                  : 'LOW'
           }
 
           if (ranking[0] && bestDirectOpening) {
@@ -3152,32 +3173,44 @@ export function solveTreasures(
               a.index - b.index
             )[0] ?? null
 
-          // Exact-but-capped horizon search is much more trustworthy than the
-          // reduced model, but still not proof-quality. Require a small margin
-          // before sacrificing a stronger direct hit. Fully optimal endgames
-          // never use this guard.
+          // v9 regret control applies to EVERY non-optimal exact state, not
+          // only capped searches. Exact board enumeration does not make a
+          // finite-horizon decision tree proof-quality. A tiny expected-cost
+          // edge is not enough to sacrifice a much stronger direct hit.
           const exactPreferred = smartDigRanking[0] ?? null
           if (
             exactPreferred &&
             bestDirectExact &&
             !exactPreferred.endgameOptimal &&
-            exactPreferred.lookaheadCapped &&
             exactPreferred.index !== bestDirectExact.index &&
             Number.isFinite(exactPreferred.expectedDigsToComplete) &&
             Number.isFinite(bestDirectExact.expectedDigsToComplete)
           ) {
-            const exactMargin = 0.20
+            const baseExactMargin = exactPreferred.lookaheadCapped ? 0.25 : 0.15
+            const probabilityGap = Math.max(
+              0,
+              bestDirectExact.targetHitProbability -
+                exactPreferred.targetHitProbability,
+            )
+            const probabilityRegretMargin = probabilityGap > 0.30 ? 0.25 :
+              probabilityGap > 0.20 ? 0.15 :
+                probabilityGap > 0.10 ? 0.08 : 0
+            const exactMargin = baseExactMargin + probabilityRegretMargin
             const modelAdvantage =
               bestDirectExact.expectedDigsToComplete -
               exactPreferred.expectedDigsToComplete
             exactPreferred.robustCostMargin = exactMargin
             exactPreferred.robustCostAdvantage = modelAdvantage
+            exactPreferred.directProbabilityGap = probabilityGap
 
             if (modelAdvantage < exactMargin - 1e-12) {
               bestDirectExact.robustFallbackUsed = true
-              bestDirectExact.robustReason = 'capped-exact-cost-margin'
+              bestDirectExact.robustReason = exactPreferred.lookaheadCapped
+                ? 'capped-exact-regret-margin'
+                : 'exact-regret-margin'
               bestDirectExact.robustCostMargin = exactMargin
               bestDirectExact.robustCostAdvantage = modelAdvantage
+              bestDirectExact.directProbabilityGap = probabilityGap
               bestDirectExact.modelPreferredIndex = exactPreferred.index
               bestDirectExact.modelPreferredProbability =
                 exactPreferred.targetHitProbability
@@ -3190,6 +3223,16 @@ export function solveTreasures(
                 smartDigRanking.unshift(bestDirectExact)
               }
             }
+          }
+
+          for (const item of smartDigRanking) {
+            item.decisionConfidence = item.endgameOptimal
+              ? 'OPTIMAL'
+              : item.lookaheadCapped
+                ? 'MEDIUM'
+                : layoutCount <= 50
+                  ? 'HIGH'
+                  : 'MEDIUM'
           }
 
           if (smartDigRanking[0] && bestDirectExact) {
