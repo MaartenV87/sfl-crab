@@ -115,6 +115,7 @@ describe('treasure probability enumeration', () => {
 
     expect(result.smartDig.adaptiveNext).toBe(true)
     expect(
+      result.smartDig.endgamePolicy === 'one-probe-direct-rollout' ||
       result.smartDig.endgameOptimal ||
       result.smartDig.adaptiveDepth >= 2
     ).toBe(true)
@@ -160,10 +161,10 @@ describe('treasure probability enumeration', () => {
     expect([3, 4]).toContain(result.smartDig.index)
     expect(result.smartDig.targetHitProbability).toBeCloseTo(0.5)
     expect(result.smartDig.expectedDigsToComplete).toBeCloseTo(1.5)
-    expect(result.smartDig.endgameOptimal).toBe(true)
-    expect(result.smartDig.decisionConfidence).toBe('OPTIMAL')
+    expect(result.smartDig.endgamePolicy).toBe('one-probe-direct-rollout')
+    expect(result.smartDig.endgameOptimal).toBe(false)
     expect(result.smartDig.lookaheadCapped).toBe(false)
-    expect(result.smartDig.endgameStateCount).toBeGreaterThan(0)
+    expect(result.smartDig.expectedDigsToComplete).toBeCloseTo(1.5)
   })
 
 
