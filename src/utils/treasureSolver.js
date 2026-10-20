@@ -2693,6 +2693,84 @@ export function solveTreasures(
             })
           }
 
+          // V10 fast last-target planner. Avoid recursing through thousands of
+          // equivalent full boards. Full boards contribute only outcome
+          // likelihoods conditional on each distinct target location.
+          // One information dig is evaluated exactly, followed by a concrete
+          // direct-hit policy ordered by posterior target probability.
+          // This is a BOUNDED policy, never labelled globally optimal.
+          if (targetRemainingCount === 1) {
+            const bySignature = new Map()
+            for (let si = 0; si < targetSolutionCells.length; si++) {
+              const idx = targetSolutionCells[si]?.[0]
+              if (!Number.isInteger(idx)) continue
+              if (!bySignature.has(idx)) bySignature.set(idx, [])
+              bySignature.get(idx).push(si)
+            }
+            const layouts = [...bySignature.entries()]
+            const layoutCountFast = layouts.length
+            const probeCandidates = new Set(
+              [...targetProbabilities.keys()].filter(idx =>
+                !actuallyRevealedCells.has(idx)),
+            )
+            for (const item of [...smartDigRanking]
+              .sort((a,b) => b.targetInfoGain-a.targetInfoGain)
+              .slice(0, mobilePerformance ? 6 : 12)) {
+              probeCandidates.add(item.index)
+            }
+            const rankingByIndex = new Map(smartDigRanking.map(x=>[x.index,x]))
+            const expectedDirectSearch = posterior => {
+              const sorted = [...posterior.values()].sort((a,b)=>b-a)
+              const mass = sorted.reduce((a,b)=>a+b,0)
+              if (!mass) return 0
+              return sorted.reduce((cost,p,i)=>cost+p/mass*(i+1),0)
+            }
+            const perActionCost = new Map()
+            for (const action of probeCandidates) {
+              if (actuallyRevealedCells.has(action)) continue
+              const branches = new Map()
+              for (const [targetCell, solutionIds] of layouts) {
+                const layoutMass = 1 / layoutCountFast
+                const perSolution = layoutMass / solutionIds.length
+                for (const si of solutionIds) {
+                  const outcome = solutionOutcomeCodes[si]?.[action] ?? 0
+                  if (!branches.has(outcome)) branches.set(outcome,new Map())
+                  const posterior = branches.get(outcome)
+                  posterior.set(targetCell,
+                    (posterior.get(targetCell) ?? 0) + perSolution)
+                }
+              }
+              let future = 0
+              for (const posterior of branches.values()) {
+                // A hit completes the search; a miss leaves a posterior
+                // distribution over remaining target cells.
+                const total = [...posterior.values()].reduce((a,b)=>a+b,0)
+                if (!total) continue
+                const missPosterior = new Map(posterior)
+                missPosterior.delete(action)
+                const missMass = [...missPosterior.values()].reduce((a,b)=>a+b,0)
+                future += missMass * expectedDirectSearch(missPosterior)
+              }
+              const cost = 1 + future
+              perActionCost.set(action,cost)
+              const candidate = rankingByIndex.get(action)
+              if (candidate) {
+                candidate.expectedDigsToComplete = cost
+                candidate.adaptiveScore = -cost
+                candidate.adaptiveDepth = 1
+                candidate.lookaheadCapped = false
+                candidate.endgameOptimal = false
+                candidate.endgamePolicy = 'one-probe-direct-rollout'
+                candidate.decisionConfidence = 'HIGH'
+              }
+            }
+            // Non-evaluated candidates are not part of the V10 policy.
+            for (const candidate of smartDigRanking) {
+              if (!perActionCost.has(candidate.index)) {
+                candidate.expectedDigsToComplete = Infinity
+              }
+            }
+          } else {
           // Adaptive v5: minimize EXPECTED DIGS TO COMPLETION.
           //
           // v4 maximized progress/completion inside a fixed horizon. That can
@@ -3300,6 +3378,8 @@ export function solveTreasures(
                 candidate.adaptiveDepth = 0
               }
             }
+          }
+
           }
 
           smartDigRanking.sort((a, b) =>
