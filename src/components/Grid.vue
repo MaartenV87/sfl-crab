@@ -108,6 +108,10 @@
       </div>
     </div>
 
+    <div v-if="showProbability && solverTimedOut" class="next-dig-summary" role="status">
+      Calculation took too long. Try Mobile solver or update a tile to retry.
+    </div>
+
     <div
       v-if="showProbability && probabilityTarget && isCalculating"
       class="next-dig-summary"
@@ -270,7 +274,7 @@ const picker = ref(null)
 // able to anchor to its shape. Including all shapes only ever makes deductions
 // more conservative (never a wrong guarantee).
 const { solverPatternKeys, desert } = useLandData()
-const { isCalculating, guaranteed, guaranteedSlugs, guaranteedCandidates, probabilities, targetProbabilities, globalSolutionCount, probabilityComplete, probabilityMode, smartDig, smartDigRanking, targetPlan, targetComplete, targetRequiredCount, targetFoundCount, targetRemainingCount, targetLayoutCount } = usePredictionEngine(
+const { isCalculating, solverTimedOut, guaranteed, guaranteedSlugs, guaranteedCandidates, probabilities, targetProbabilities, globalSolutionCount, probabilityComplete, probabilityMode, smartDig, smartDigRanking, targetPlan, targetComplete, targetRequiredCount, targetFoundCount, targetRemainingCount, targetLayoutCount } = usePredictionEngine(
   tiles,
   solverPatternKeys,
   toRef(() => showPrediction || showProbability),
