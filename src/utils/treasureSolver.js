@@ -2757,6 +2757,11 @@ export function solveTreasures(
               if (candidate) {
                 candidate.expectedDigsToComplete = cost
                 candidate.adaptiveScore = -cost
+                candidate.adaptiveNext = true
+                candidate.expectedFoundFraction = candidate.targetHitProbability
+                candidate.expectedRemainingTargets = Math.max(
+                  0, 1 - candidate.targetHitProbability)
+                candidate.completionProbability = candidate.targetHitProbability
                 candidate.adaptiveDepth = 1
                 candidate.lookaheadCapped = false
                 candidate.endgameOptimal = false
@@ -2768,6 +2773,7 @@ export function solveTreasures(
             for (const candidate of smartDigRanking) {
               if (!perActionCost.has(candidate.index)) {
                 candidate.expectedDigsToComplete = Infinity
+                candidate.adaptiveNext = true
               }
             }
           } else {
