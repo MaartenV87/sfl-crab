@@ -2001,8 +2001,13 @@ export function solveTreasures(
             const probabilityRegretMargin = probabilityGap > 0.30 ? 0.25 :
               probabilityGap > 0.20 ? 0.15 :
                 probabilityGap > 0.10 ? 0.08 : 0
+            const completionUrgencyMargin =
+              targetRemainingCount === 1 && probabilityGap > 0.05 ? 0.20 :
+                targetRemainingCount === 2 && probabilityGap > 0.10 ? 0.08 : 0
             const requiredMargin =
-              approximateCostMargin + probabilityRegretMargin
+              approximateCostMargin +
+              probabilityRegretMargin +
+              completionUrgencyMargin
 
             modelPreferredOpening.robustCostMargin = requiredMargin
             modelPreferredOpening.robustCostAdvantage = modelAdvantage
@@ -2045,6 +2050,12 @@ export function solveTreasures(
               Number.isFinite(bestDirectOpening.expectedDigsToComplete)
                 ? bestDirectOpening.expectedDigsToComplete
                 : null
+            ranking[0].directCostAdvantage =
+              Number.isFinite(bestDirectOpening.expectedDigsToComplete) &&
+              Number.isFinite(ranking[0].expectedDigsToComplete)
+                ? bestDirectOpening.expectedDigsToComplete -
+                  ranking[0].expectedDigsToComplete
+                : 0
           }
 
           return {
@@ -2985,173 +2996,215 @@ export function solveTreasures(
             candidate.lookaheadCapped = adaptiveCapped
           }
 
-          // v7 exact last-target endgame.
+          // v10 compressed exact last-target endgame.
           //
-          // With one target left and a small number of target layouts, solve
-          // the decision problem to completion instead of using a depth/node
-          // capped horizon. A state is fully described by the still-compatible
-          // full solutions; past non-target digs need not be memoized because
-          // their observed information is already encoded by that subset.
+          // Full-board solutions can differ in formation bookkeeping while
+          // being observationally identical for every remaining dig. Collapse
+          // those duplicates into weighted observable hypotheses first, then
+          // solve the last-target policy to completion. This preserves exact
+          // sequential outcome correlations while greatly reducing the state
+          // space in the common "many full boards / few target layouts" case.
           //
-          // Useless actions (same posterior state, no target hit) are skipped,
-          // and actions that induce the same posterior partition are evaluated
-          // only once per state. This makes the 4-layout style endgames from
-          // real logs tiny and gives a proof-quality expected dig count.
-          const optimalSolutionCap = mobilePerformance
-            ? (
-                layoutCount <= 4 ? 600 :
-                  layoutCount <= 8 ? 400 : 250
-              )
-            : (
-                layoutCount <= 4 ? 2500 :
-                  layoutCount <= 8 ? 1200 : 750
-              )
-          const useOptimalEndgame =
+          // The policy is marked optimal only when the whole compressed search
+          // completes inside the safety cap. Otherwise v9's bounded planner and
+          // regret guard remain authoritative.
+          const compressedEndgameRawSolutionCap = mobilePerformance ? 700 : 1800
+          const useCompressedEndgameCandidate =
             targetRemainingCount === 1 &&
-            layoutCount <= 12 &&
-            globalSolutionCount <= optimalSolutionCap
+            layoutCount <= 25 &&
+            globalSolutionCount <= compressedEndgameRawSolutionCap
 
-          if (useOptimalEndgame) {
+          if (useCompressedEndgameCandidate) {
             const targetOutcomeCode =
               outcomeCodeByName.get(`treasure:${normalizedProbabilityTarget}`)
             const allActions = smartDigRanking
               .map(item => item.index)
               .filter(idx => !actuallyRevealedCells.has(idx))
               .sort((a, b) => a - b)
-            const optimalMemo = new Map()
-            let optimalStates = 0
 
-            const posteriorWeight = indexes => {
-              let sum = 0
-              for (const si of indexes) sum += solutionWeights[si] ?? 0
-              return sum
-            }
+            if (targetOutcomeCode != null && allActions.length) {
+              const atomsByFingerprint = new Map()
 
-            const directRolloutCost = indexes => {
-              const total = posteriorWeight(indexes)
-              if (total <= 0) return 0
-              const targetMass = new Map()
-              for (const si of indexes) {
+              for (const si of initialSolutions) {
                 const targetIdx = targetSolutionCells[si]?.[0]
                 if (!Number.isFinite(targetIdx)) continue
-                targetMass.set(
-                  targetIdx,
-                  (targetMass.get(targetIdx) ?? 0) +
-                    (solutionWeights[si] ?? 0),
-                )
-              }
-              const order = [...targetMass.entries()]
-                .sort((a, b) => b[1] - a[1] || a[0] - b[0])
-              let expected = 0
-              for (let i = 0; i < order.length; i++) {
-                expected += (order[i][1] / total) * (i + 1)
-              }
-              return expected
-            }
 
-            const partitionForAction = (indexes, action) => {
-              const groups = new Map()
-              for (const si of indexes) {
-                const code = solutionOutcomeCodes[si]?.[action] ?? 0
-                if (!groups.has(code)) groups.set(code, [])
-                groups.get(code).push(si)
-              }
-              return groups
-            }
-
-            const optimalCost = indexes => {
-              if (!indexes.length) return 0
-              const key = indexes.join(',')
-              if (optimalMemo.has(key)) return optimalMemo.get(key)
-              optimalStates += 1
-
-              let best = directRolloutCost(indexes)
-              const total = posteriorWeight(indexes)
-              if (total <= 0 || best <= 1 + 1e-12) {
-                optimalMemo.set(key, best)
-                return best
-              }
-
-              const seenPartitions = new Set()
-              for (const action of allActions) {
-                const groups = partitionForAction(indexes, action)
-                const targetBranch = targetOutcomeCode == null
-                  ? null
-                  : groups.get(targetOutcomeCode)
-                const targetMass = targetBranch
-                  ? posteriorWeight(targetBranch)
-                  : 0
-
-                // One unchanged non-target bucket and no possible hit: this dig
-                // cannot improve the state.
-                if (groups.size === 1 && targetMass <= 1e-12) continue
-
-                const nonTargetGroups = []
-                for (const [code, branch] of groups) {
-                  if (code === targetOutcomeCode) continue
-                  if (branch.length) nonTargetGroups.push(branch)
+                const fingerprintParts = [targetIdx]
+                for (const action of allActions) {
+                  fingerprintParts.push(solutionOutcomeCodes[si]?.[action] ?? 0)
                 }
+                const fingerprint = fingerprintParts.join('.')
 
-                // Canonicalize by posterior subsets, not raw outcome labels:
-                // different cells that split the state identically are the
-                // same decision for the one-target objective.
-                const partitionKey = nonTargetGroups
-                  .map(branch => branch.join(','))
-                  .sort()
-                  .join('|')
-                if (seenPartitions.has(partitionKey)) continue
-                seenPartitions.add(partitionKey)
-
-                let future = 0
-                for (const branch of nonTargetGroups) {
-                  const p = posteriorWeight(branch) / total
-                  if (p <= 0) continue
-                  // Every non-target branch is a strict posterior reduction
-                  // for useful actions, so recursion cannot cycle.
-                  if (branch.length === indexes.length) {
-                    future = Infinity
-                    break
+                let atom = atomsByFingerprint.get(fingerprint)
+                if (!atom) {
+                  atom = {
+                    representative: si,
+                    targetIdx,
+                    weight: 0,
                   }
-                  future += p * optimalCost(branch)
+                  atomsByFingerprint.set(fingerprint, atom)
                 }
-
-                const cost = 1 + future
-                if (cost < best) best = cost
+                atom.weight += solutionWeights[si] ?? 0
               }
 
-              optimalMemo.set(key, best)
-              return best
-            }
+              const atoms = [...atomsByFingerprint.values()]
+              const atomCap = mobilePerformance ? 320 : 700
 
-            const rootTotal = posteriorWeight(initialSolutions)
-            for (const candidate of smartDigRanking) {
-              const firstIdx = candidate.index
-              if (!allActions.includes(firstIdx)) continue
+              if (atoms.length > 0 && atoms.length <= atomCap) {
+                const initialAtoms = Array.from(
+                  { length: atoms.length },
+                  (_, i) => i,
+                )
+                const optimalMemo = new Map()
+                let optimalStates = 0
+                let optimalAborted = false
+                const OPTIMAL_STATE_CAP = mobilePerformance ? 45000 : 180000
 
-              const groups = partitionForAction(initialSolutions, firstIdx)
-              let expectedFuture = 0
-              for (const [code, branch] of groups) {
-                if (code === targetOutcomeCode) continue
-                const p = posteriorWeight(branch) / rootTotal
-                if (p <= 0) continue
-                if (branch.length === initialSolutions.length) {
-                  expectedFuture = Infinity
-                  break
+                const posteriorWeight = atomIndexes => {
+                  let sum = 0
+                  for (const ai of atomIndexes) sum += atoms[ai]?.weight ?? 0
+                  return sum
                 }
-                expectedFuture += p * optimalCost(branch)
-              }
 
-              candidate.expectedDigsToComplete = 1 + expectedFuture
-              candidate.adaptiveScore = -candidate.expectedDigsToComplete
-              candidate.lookaheadCapped = false
-              candidate.endgameOptimal = true
-              candidate.endgameStateCount = optimalStates
-              candidate.adaptiveDepth = 0
-            }
+                const directRolloutCost = atomIndexes => {
+                  const total = posteriorWeight(atomIndexes)
+                  if (total <= 0) return 0
 
-            for (const candidate of smartDigRanking) {
-              if (candidate.endgameOptimal) {
-                candidate.endgameStateCount = optimalStates
+                  const targetMass = new Map()
+                  for (const ai of atomIndexes) {
+                    const atom = atoms[ai]
+                    if (!atom || !Number.isFinite(atom.targetIdx)) continue
+                    targetMass.set(
+                      atom.targetIdx,
+                      (targetMass.get(atom.targetIdx) ?? 0) + atom.weight,
+                    )
+                  }
+
+                  const order = [...targetMass.entries()]
+                    .sort((a, b) => b[1] - a[1] || a[0] - b[0])
+                  let expected = 0
+                  for (let i = 0; i < order.length; i++) {
+                    expected += (order[i][1] / total) * (i + 1)
+                  }
+                  return expected
+                }
+
+                const partitionForAction = (atomIndexes, action) => {
+                  const groups = new Map()
+                  for (const ai of atomIndexes) {
+                    const representative = atoms[ai]?.representative
+                    const code =
+                      solutionOutcomeCodes[representative]?.[action] ?? 0
+                    if (!groups.has(code)) groups.set(code, [])
+                    groups.get(code).push(ai)
+                  }
+                  return groups
+                }
+
+                const optimalCost = atomIndexes => {
+                  if (!atomIndexes.length) return 0
+                  const key = atomIndexes.join(',')
+                  if (optimalMemo.has(key)) return optimalMemo.get(key)
+
+                  optimalStates += 1
+                  if (optimalStates > OPTIMAL_STATE_CAP) {
+                    optimalAborted = true
+                    return directRolloutCost(atomIndexes)
+                  }
+
+                  let best = directRolloutCost(atomIndexes)
+                  const total = posteriorWeight(atomIndexes)
+                  if (total <= 0 || best <= 1 + 1e-12) {
+                    optimalMemo.set(key, best)
+                    return best
+                  }
+
+                  const seenPartitions = new Set()
+                  for (const action of allActions) {
+                    if (optimalAborted) break
+
+                    const groups = partitionForAction(atomIndexes, action)
+                    const targetBranch = groups.get(targetOutcomeCode)
+                    const targetMass = targetBranch
+                      ? posteriorWeight(targetBranch)
+                      : 0
+
+                    if (groups.size === 1 && targetMass <= 1e-12) continue
+
+                    const nonTargetGroups = []
+                    for (const [code, branch] of groups) {
+                      if (code === targetOutcomeCode) continue
+                      if (branch.length) nonTargetGroups.push(branch)
+                    }
+
+                    const partitionKey = nonTargetGroups
+                      .map(branch => branch.join(','))
+                      .sort()
+                      .join('|')
+                    if (seenPartitions.has(partitionKey)) continue
+                    seenPartitions.add(partitionKey)
+
+                    let future = 0
+                    for (const branch of nonTargetGroups) {
+                      const p = posteriorWeight(branch) / total
+                      if (p <= 0) continue
+                      if (branch.length === atomIndexes.length) {
+                        future = Infinity
+                        break
+                      }
+                      future += p * optimalCost(branch)
+                      if (optimalAborted) break
+                    }
+
+                    const cost = 1 + future
+                    if (cost < best) best = cost
+                  }
+
+                  optimalMemo.set(key, best)
+                  return best
+                }
+
+                const rootTotal = posteriorWeight(initialAtoms)
+                const candidateCosts = new Map()
+
+                for (const candidate of smartDigRanking) {
+                  if (optimalAborted) break
+                  const firstIdx = candidate.index
+                  if (!allActions.includes(firstIdx)) continue
+
+                  const groups = partitionForAction(initialAtoms, firstIdx)
+                  let expectedFuture = 0
+
+                  for (const [code, branch] of groups) {
+                    if (code === targetOutcomeCode) continue
+                    const p = posteriorWeight(branch) / rootTotal
+                    if (p <= 0) continue
+                    if (branch.length === initialAtoms.length) {
+                      expectedFuture = Infinity
+                      break
+                    }
+                    expectedFuture += p * optimalCost(branch)
+                    if (optimalAborted) break
+                  }
+
+                  candidateCosts.set(firstIdx, 1 + expectedFuture)
+                }
+
+                if (!optimalAborted && candidateCosts.size) {
+                  for (const candidate of smartDigRanking) {
+                    const cost = candidateCosts.get(candidate.index)
+                    if (!Number.isFinite(cost)) continue
+                    candidate.expectedDigsToComplete = cost
+                    candidate.adaptiveScore = -cost
+                    candidate.lookaheadCapped = false
+                    candidate.endgameOptimal = true
+                    candidate.endgameCompressed = true
+                    candidate.endgameHypothesisCount = atoms.length
+                    candidate.endgameRawSolutionCount = globalSolutionCount
+                    candidate.endgameStateCount = optimalStates
+                    candidate.adaptiveDepth = 0
+                  }
+                }
               }
             }
           }
@@ -3341,7 +3394,12 @@ export function solveTreasures(
             const probabilityRegretMargin = probabilityGap > 0.30 ? 0.25 :
               probabilityGap > 0.20 ? 0.15 :
                 probabilityGap > 0.10 ? 0.08 : 0
-            const exactMargin = baseExactMargin + probabilityRegretMargin
+            const completionUrgencyMargin =
+              targetRemainingCount === 1 && probabilityGap > 0.05 ? 0.15 : 0
+            const exactMargin =
+              baseExactMargin +
+              probabilityRegretMargin +
+              completionUrgencyMargin
             const modelAdvantage =
               bestDirectExact.expectedDigsToComplete -
               exactPreferred.expectedDigsToComplete
@@ -3389,6 +3447,12 @@ export function solveTreasures(
               Number.isFinite(bestDirectExact.expectedDigsToComplete)
                 ? bestDirectExact.expectedDigsToComplete
                 : null
+            smartDigRanking[0].directCostAdvantage =
+              Number.isFinite(bestDirectExact.expectedDigsToComplete) &&
+              Number.isFinite(smartDigRanking[0].expectedDigsToComplete)
+                ? bestDirectExact.expectedDigsToComplete -
+                  smartDigRanking[0].expectedDigsToComplete
+                : 0
           }
         } else {
           // If no target is selected (or its location is already fully known),
