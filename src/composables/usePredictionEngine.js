@@ -31,6 +31,7 @@ export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { grid
   const targetRemainingCount = ref(0)
   const targetLayoutCount = ref(0)
   const isCalculating = ref(false)
+  const solverTimedOut = ref(false)
 
   const schedule = (typeof window !== 'undefined' && window.requestIdleCallback)
     ? window.requestIdleCallback.bind(window)
@@ -42,6 +43,11 @@ export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { grid
   let idleId = null
   let worker = null
   let solveId = 0
+  let workerTimeout = null
+  const clearWorkerTimeout = () => {
+    if (workerTimeout != null) clearTimeout(workerTimeout)
+    workerTimeout = null
+  }
 
   function applyResult(result) {
     guaranteed.value = result.guaranteed
@@ -99,6 +105,8 @@ export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { grid
     // finish after a newer grid state (or disabled predictions) and overwrite
     // the UI with stale results.
     solveId += 1
+    clearWorkerTimeout()
+    solverTimedOut.value = false
     if (worker) {
       worker.terminate()
       worker = null
@@ -151,9 +159,20 @@ export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { grid
         )
         worker = activeWorker
         isCalculating.value = true
+        // Always release the background worker, even if a pathological board
+        // exceeds its computational budget. Never leave Calculating forever.
+        workerTimeout = setTimeout(() => {
+          if (worker !== activeWorker || id !== solveId) return
+          activeWorker.terminate()
+          worker = null
+          isCalculating.value = false
+          solverTimedOut.value = true
+          console.warn('Prediction solve exceeded the background time limit')
+        }, performanceProfileRef?.value === 'mobile' ? 10000 : 16000)
 
         activeWorker.onmessage = event => {
-          if (event.data?.id !== id) return
+          if (event.data?.id !== id || worker !== activeWorker) return
+          clearWorkerTimeout()
           if (event.data?.error) {
             console.error('Prediction worker failed:', event.data.error)
             if (worker === activeWorker) {
@@ -172,6 +191,7 @@ export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { grid
         }
 
         activeWorker.onerror = event => {
+          clearWorkerTimeout()
           console.error('Prediction worker error:', event.message || event)
           if (worker === activeWorker) {
             isCalculating.value = false
@@ -212,6 +232,7 @@ export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { grid
   )
 
   onUnmounted(() => {
+    clearWorkerTimeout()
     if (idleId != null) {
       cancel(idleId)
       idleId = null
@@ -223,5 +244,5 @@ export function usePredictionEngine(tilesRef, patternKeysRef, enabledRef, { grid
     isCalculating.value = false
   })
 
-  return { isCalculating, guaranteed, guaranteedSlugs, guaranteedCandidates, guaranteedFormationCounts, remainingCounts, remainingRegions, possibleTreasureCells, probabilities, targetProbabilities, globalSolutionCount, probabilityComplete, probabilityReason, probabilityMode, smartDig, smartDigRanking, targetPlan, targetComplete, targetRequiredCount, targetFoundCount, targetRemainingCount, targetLayoutCount }
+  return { isCalculating, solverTimedOut, guaranteed, guaranteedSlugs, guaranteedCandidates, guaranteedFormationCounts, remainingCounts, remainingRegions, possibleTreasureCells, probabilities, targetProbabilities, globalSolutionCount, probabilityComplete, probabilityReason, probabilityMode, smartDig, smartDigRanking, targetPlan, targetComplete, targetRequiredCount, targetFoundCount, targetRemainingCount, targetLayoutCount }
 }
