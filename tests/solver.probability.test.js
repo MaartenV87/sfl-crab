@@ -327,13 +327,13 @@ describe('treasure probability enumeration', () => {
   })
 
   it('also prioritizes a certain target in approximate reduced mode', () => {
-    const tiles = emptyTiles(3)
+    const tiles = emptyTiles(5)
     tiles[0] = treasureTile('vase')
     tiles[1] = treasureTile('vase')
     const result = solveTreasures(
       tiles,
-      ['HIEROGLYPH'],
-      3,
+      ['HIEROGLYPH', 'COCKLE'],
+      5,
       {
         includeProbabilities: true,
         probabilityTarget: 'hieroglyph',
