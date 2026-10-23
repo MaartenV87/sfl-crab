@@ -326,6 +326,27 @@ describe('treasure probability enumeration', () => {
     )
   })
 
+  it('also prioritizes a certain target in approximate reduced mode', () => {
+    const tiles = emptyTiles(3)
+    tiles[0] = treasureTile('vase')
+    tiles[1] = treasureTile('vase')
+    const result = solveTreasures(
+      tiles,
+      ['HIEROGLYPH'],
+      3,
+      {
+        includeProbabilities: true,
+        probabilityTarget: 'hieroglyph',
+        probabilitySolutionCap: 1,
+        probabilityNodeCap: 10000,
+      },
+    )
+    expect(result.probabilityMode).toBe('approximate')
+    expect(result.smartDig?.index).toBe(3)
+    expect(result.smartDig?.targetHitProbability).toBeCloseTo(1)
+    expect(result.smartDig?.decisionConfidence).toBe('CERTAIN')
+  })
+
   it('always prioritizes a logically certain target over information digs', () => {
     const tiles = emptyTiles(3)
     tiles[0] = treasureTile('vase')
