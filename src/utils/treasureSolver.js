@@ -2037,6 +2037,40 @@ export function solveTreasures(
                   : 'LOW'
           }
 
+          // V11: a target in EVERY complete target-bearing configuration is
+          // logically forced, even when unrelated formations cannot all be
+          // enumerated. Never defer that certain hit for an estimated
+          // information benefit (v10 delayed B7=100% for three digs).
+          // This is NOT a rule for rounded/near-100% probabilities.
+          if (!openingAborted && configurationCount > 0) {
+            const certainCells = [...targetPresenceCountsOpening.entries()]
+              .filter(([idx, count]) =>
+                !actuallyRevealedCells.has(idx) &&
+                count === configurationCount &&
+                openingTargetProbabilities.get(idx) >= 1 - 1e-12
+              )
+              .map(([idx]) => idx)
+            if (certainCells.length) {
+              const certain = ranking
+                .filter(item => certainCells.includes(item.index))
+                .sort((a, b) =>
+                  (a.expectedDigsToComplete ?? Infinity) -
+                    (b.expectedDigsToComplete ?? Infinity) ||
+                  a.index - b.index
+                )[0]
+              if (certain) {
+                certain.certainTargetOverride = true
+                certain.decisionConfidence = 'CERTAIN'
+                certain.robustFallbackUsed = false
+                const current = ranking.indexOf(certain)
+                if (current > 0) {
+                  ranking.splice(current, 1)
+                  ranking.unshift(certain)
+                }
+              }
+            }
+          }
+
           if (ranking[0] && bestDirectOpening) {
             ranking[0].bestDirectAlternativeIndex = bestDirectOpening.index
             ranking[0].bestDirectAlternativeProbability =
@@ -3465,6 +3499,24 @@ export function solveTreasures(
                 : layoutCount <= 50
                   ? 'HIGH'
                   : 'MEDIUM'
+          }
+
+          // Exact complete-board enumeration is stronger than any bounded
+          // cost heuristic. A 100% target cell must be the next dig.
+          const certainExact = [...smartDigRanking]
+            .filter(item =>
+              item.targetHitProbability >= 1 - 1e-12 &&
+              !actuallyRevealedCells.has(item.index))
+            .sort((a, b) => a.index - b.index)[0]
+          if (certainExact) {
+            certainExact.certainTargetOverride = true
+            certainExact.decisionConfidence = 'CERTAIN'
+            certainExact.robustFallbackUsed = false
+            const current = smartDigRanking.indexOf(certainExact)
+            if (current > 0) {
+              smartDigRanking.splice(current, 1)
+              smartDigRanking.unshift(certainExact)
+            }
           }
 
           if (smartDigRanking[0] && bestDirectExact) {
